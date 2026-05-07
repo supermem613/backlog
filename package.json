@@ -1,0 +1,21 @@
+{
+  "name": "copilot-cli-backlog",
+  "version": "0.1.0",
+  "description": "Copilot CLI extension for managing a per-session task backlog with a live sidecar viewer.",
+  "type": "module",
+  "private": false,
+  "license": "MIT",
+  "author": "Marcus Markiewicz",
+  "homepage": "https://github.com/supermem613/copilot-cli-backlog",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/supermem613/copilot-cli-backlog.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "node --check .github/extensions/backlog/extension.mjs && node --check .github/extensions/backlog/db.mjs && node --check .github/extensions/backlog/items.mjs && node --check .github/extensions/backlog/sidecar.mjs && node --check .github/extensions/backlog/commands.mjs && node --check .github/extensions/backlog/prompt.mjs && node --check scripts/install-extension-shim.mjs",
+    "test": "node .github/extensions/backlog/tests/test-id-generation.mjs && node .github/extensions/backlog/tests/test-items.mjs && node .github/extensions/backlog/tests/test-position-reorder.mjs && node .github/extensions/backlog/tests/test-command-parsing.mjs && node .github/extensions/backlog/tests/test-sidecar-snapshot.mjs && node .github/extensions/backlog/tests/test-lock.mjs"
+  }
+}

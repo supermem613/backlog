@@ -1,0 +1,20 @@
+{
+  "name": "copilot-cli-backlog",
+  "description": "Per-session task backlog for GitHub Copilot CLI, with deterministic slash commands, in-conversation tools, and a live sidecar viewer.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Marcus Markiewicz"
+  },
+  "license": "MIT",
+  "keywords": [
+    "copilot",
+    "copilot-cli",
+    "backlog",
+    "tasks",
+    "todo",
+    "queue",
+    "productivity"
+  ],
+  "category": "productivity",
+  "skills": "skills/"
+}
