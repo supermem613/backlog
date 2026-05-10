@@ -159,7 +159,7 @@ Then `/extensions` → reload `backlog`. Edits to the working tree take effect o
 copilot-cli-backlog/
 ├── .github/
 │   ├── extensions/backlog/    SDK extension: db, items, sidecar, commands, prompt, extension + viewer.html + favicon.svg + tests
-│   └── workflows/ci.yml       Cross-platform CI: node --check + tests on Node 22 & 24
+│   └── workflows/ci.yml       Cross-platform CI: node --check + tests on Node 24
 ├── scripts/
 │   └── install-extension-shim.mjs   Writes the user-scoped delegate after plugin install
 ├── skills/
