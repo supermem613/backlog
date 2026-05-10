@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Copilot CLI Extension: Backlog
- * A per-session task queue with deterministic slash commands, tools, and drain hooks.
+ * A per-session task queue with deterministic slash commands, tools, and sidecar control.
  * Storage: ~/.backlog/backlog.db (node:sqlite — zero deps, bundled with Node 24)
  *
  * Module layout:
@@ -10,7 +10,7 @@
  *   prompt.mjs   — engage prompt + reminder banner strings
  *   sidecar.mjs  — singleton viewer (HTTP+WS), owner/peer election, browser launch
  *   commands.mjs — /backlog slash command parser + dispatcher
- *   extension.mjs (this file) — joinSession bootstrap, tools, hooks, signal handlers
+ *   extension.mjs (this file) — joinSession bootstrap, tools, signal handlers
  */
 
 import { joinSession } from "@github/copilot-sdk/extension";
@@ -30,7 +30,6 @@ import {
   getPendingCount,
 } from "./items.mjs";
 import {
-  sidecarState,
   setActiveSessionId,
   setSessionRef,
   registerActiveSession,
@@ -41,12 +40,7 @@ import {
   pushLabelToOwner,
 } from "./sidecar.mjs";
 import {
-  makeIdleHeader,
-  makeExitIntentReminder,
-  makeBusyReminder,
   makeSessionEndBanner,
-  POST_TASK_REMINDER,
-  detectExitIntent,
 } from "./prompt.mjs";
 import { handleBacklogCommand } from "./commands.mjs";
 
@@ -57,14 +51,25 @@ initBacklog();
 
 let activeSessionId = null;
 
+function setActiveSession(id) {
+  if (!id) return null;
+  activeSessionId = id;
+  setActiveSessionId(id);
+  ensureSession(id);
+  return id;
+}
+
+function logPendingOnEnd() {
+  if (!activeSessionId) return;
+  const count = getPendingCount(activeSessionId);
+  if (count === 0) return;
+  const items = db.prepare(
+    "SELECT id, description, position FROM items WHERE session_id = ? AND status = ? ORDER BY position LIMIT 5"
+  ).all(activeSessionId, "pending");
+  session.log(makeSessionEndBanner(count, items), { level: "warn" });
+}
+
 const session = await joinSession({
-  onPermissionRequest: ({ toolName }) => {
-    // Auto-approve our own backlog tools
-    if (toolName.startsWith("backlog_")) {
-      return { permissionDecision: "allow" };
-    }
-    return {};
-  },
   commands: [
     {
       name: "backlog",
@@ -82,7 +87,6 @@ const session = await joinSession({
     {
       name: "backlog_next",
       description: "Get the next pending backlog item. Call this after completing a task to check for more work.",
-      skipPermission: true,
       parameters: { type: "object", properties: {} },
       handler: async (_args, invocation) => {
         const sid = invocation?.sessionId || activeSessionId || "default";
@@ -98,7 +102,6 @@ const session = await joinSession({
     {
       name: "backlog_list",
       description: "List all pending backlog items for the current session.",
-      skipPermission: true,
       parameters: { type: "object", properties: {} },
       handler: async (_args, invocation) => {
         const sid = invocation?.sessionId || activeSessionId || "default";
@@ -163,91 +166,11 @@ const session = await joinSession({
       },
     },
   ],
-
-  hooks: {
-    onSessionStart: async (input, invocation) => {
-      activeSessionId = invocation?.sessionId || null;
-      setActiveSessionId(activeSessionId);
-      if (!activeSessionId) return {};
-
-      ensureSession(activeSessionId);
-      // Seed label from cwd as an immediate fallback. session.start /
-      // session.title_changed handlers will refine it.
-      if (!getSessionLabel(activeSessionId) && input?.cwd) {
-        const fallback = String(input.cwd).split(/[\\/]/).filter(Boolean).pop();
-        if (fallback) setSessionLabel(activeSessionId, fallback);
-      }
-      // Election may have run before activeSessionId was known; register now.
-      registerActiveSession();
-      syncSidecarVisibility(activeSessionId);
-
-      const count = getPendingCount(activeSessionId);
-      const top = count > 0 ? getTopItem(activeSessionId) : null;
-      return {
-        additionalContext: [
-          makeIdleHeader(count, top),
-          POST_TASK_REMINDER,
-        ].join("\n"),
-      };
-    },
-
-    onSessionEnd: async () => {
-      // The SDK's session-end hook is notify-only — it has no veto. The best
-      // we can do is print a loud, last-moment reminder so the user sees
-      // pending work just before the window/process goes away. Items
-      // persist in the SQLite DB and surface again on the next session start.
-      try {
-        if (activeSessionId) {
-          const count = getPendingCount(activeSessionId);
-          if (count > 0) {
-            const items = db.prepare(
-              "SELECT id, description, position FROM items WHERE session_id = ? AND status = ? ORDER BY position LIMIT 5"
-            ).all(activeSessionId, "pending");
-            try { session.log(makeSessionEndBanner(count, items), { level: "warn" }); } catch {}
-          }
-        }
-      } catch {}
-      stopSidecar();
-      return {};
-    },
-
-    onUserPromptSubmitted: async (input, invocation) => {
-      if (!activeSessionId) {
-        activeSessionId = invocation?.sessionId || null;
-        setActiveSessionId(activeSessionId);
-      }
-      if (!activeSessionId) return {};
-      // The user just typed something — agent is about to be busy.
-      // Publish before any other work so the rail dot flips amber promptly.
-      setSessionState(activeSessionId, "busy");
-      syncSidecarVisibility(activeSessionId);
-      const count = getPendingCount(activeSessionId);
-      if (count === 0) return {};
-
-      // If the user's prompt looks like "I'm wrapping up" intent, inject a
-      // stronger reminder so the assistant explicitly acknowledges pending
-      // items rather than just signing off. This is the closest we can get
-      // to "blocking exit" without SDK support — the assistant becomes a
-      // confirmation gate. (Built-in `/exit` and Ctrl+C bypass this.)
-      if (detectExitIntent(input?.prompt)) {
-        const top = getTopItem(activeSessionId);
-        return { additionalContext: makeExitIntentReminder(count, top) };
-      }
-      return { additionalContext: makeBusyReminder(count) };
-    },
-  },
 });
 
 // session is now available — wire it into sidecar so /api/engage can call session.send.
 setSessionRef(session);
-// Authoritative session ID from the SDK. activeSessionId may also be set
-// by the onSessionStart hook for new sessions, but on extension reload the
-// hook doesn't re-fire, so we seed from session.sessionId here.
-if (!activeSessionId && session.sessionId) {
-  activeSessionId = session.sessionId;
-  setActiveSessionId(activeSessionId);
-  ensureSession(activeSessionId);
-}
+setActiveSession(session.sessionId || session.id);
 // Seed a label from cwd if we don't already have one — covers extension
 // reloads where session.start has long since fired and won't replay.
 if (activeSessionId && !getSessionLabel(activeSessionId)) {
@@ -286,11 +209,13 @@ function deriveLabelFromContext(ctx) {
 }
 
 session.on("session.start", (ev) => {
-  const sid = activeSessionId;
+  const sid = setActiveSession(activeSessionId || session.sessionId || session.id);
   if (!sid) return;
   const label = deriveLabelFromContext(ev.data?.context) || getSessionLabel(sid);
   if (label && !getSessionLabel(sid)) setSessionLabel(sid, label);
   if (label) pushLabelToOwner(sid, label);
+  registerActiveSession();
+  syncSidecarVisibility(sid);
 });
 
 session.on("session.title_changed", (ev) => {
@@ -305,17 +230,27 @@ session.on("session.title_changed", (ev) => {
 // burndown auto-advance fires the next item only when the agent is truly
 // idle. session.idle fires after every turn the agent finishes (including
 // turns we kicked off via session.send for a burndown auto-advance).
+session.on("assistant.message", (event) => {
+  if (event.agentId) return;
+  const sid = activeSessionId;
+  if (!sid) return;
+  setSessionState(sid, "busy");
+});
+
 session.on("session.idle", () => {
   const sid = activeSessionId;
   if (!sid) return;
   setSessionState(sid, "idle");
 });
 
+session.on?.("session.end", () => {
+  logPendingOnEnd();
+  stopSidecar();
+});
+
 // Boot the unified sidecar now that we have a session reference. Election
-// happens here unconditionally; registerActiveSession will be triggered
-// once activeSessionId is set by the onSessionStart hook (or here, if it's
-// already set). The viewer window only appears if some session has items
-// or has /backlog show'd.
+// happens here unconditionally. The viewer window only appears if some
+// session has items or has /backlog show'd.
 tryStartSidecar();
 registerActiveSession();
 

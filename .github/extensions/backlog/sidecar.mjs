@@ -104,11 +104,10 @@ export const sidecarState = {
   // is purely a visual signal.
   engaging: new Map(),
   // sessionId -> "idle" | "busy". The agent's activity state, derived from
-  // SDK `session.idle` events and `onUserPromptSubmitted` hooks (and bumped
-  // to "busy" immediately when we programmatically inject an engage prompt
-  // via session.send, so back-to-back burndown advances don't race the
-  // not-yet-published busy signal). Drives the rail chip dot color
-  // (red=offline, amber=busy, green=idle) and gates burndown auto-advance.
+  // SDK events and bumped to "busy" immediately when we programmatically
+  // inject an engage prompt via session.send, so back-to-back burndown
+  // advances don't race the not-yet-published busy signal. Drives the rail
+  // chip dot color and gates burndown auto-advance.
   // Defaults to "idle" on first sighting of a session.
   sessionState: new Map(),
   // Client-only:

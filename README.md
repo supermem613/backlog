@@ -1,6 +1,6 @@
 # copilot-cli-backlog
 
-A GitHub Copilot CLI extension that gives every session a **persistent task backlog** with deterministic slash commands, in-conversation tools the agent can call, exit-intent reminders, and a chromeless sidecar viewer for one-click control.
+A GitHub Copilot CLI extension that gives every session a **persistent task backlog** with deterministic slash commands, in-conversation tools the agent can call, and a chromeless sidecar viewer for one-click control.
 
 The agent and the human share the same backlog: you can `/backlog add` something while the agent is working, the agent can call `backlog_next` after completing a step to pick up the next item, and the sidecar window shows a live, click-to-engage list across all your active Copilot CLI sessions.
 
@@ -106,9 +106,9 @@ The agent automatically gets these tools and uses them naturally:
 - `backlog_done` — mark an item complete by id or position.
 - `backlog_remove` — drop an item without completing it.
 
-### Exit-intent reminder
+### Permission prompts
 
-When the user types something that sounds like wrapping up — *"I'm done"*, *"let's stop"*, *"signing off"* — and the backlog still has pending items, the extension injects a reminder asking the agent to surface the pending list and confirm before signing off. Built-in `/exit` and Ctrl+C still bypass this.
+Backlog avoids elevated extension capabilities: it does not skip tool permissions, register lifecycle hooks, or handle permission requests. The agent-callable tools may still ask for normal per-tool approval under Copilot CLI's standard tool-permission flow.
 
 ### Sidecar viewer
 
