@@ -46,12 +46,43 @@ export function initBacklog(dirOverride) {
     );
     CREATE INDEX IF NOT EXISTS idx_session ON items(session_id);
     CREATE INDEX IF NOT EXISTS idx_position ON items(session_id, position);
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS item_contexts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id TEXT NOT NULL,
+      context_json TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_item_contexts_item ON item_contexts(item_id, created_at);
   `);
 
   // Idempotent migration: add label column if it doesn't already exist.
   // node:sqlite has no IF NOT EXISTS for ADD COLUMN, so try/catch the duplicate.
   try { db.exec("ALTER TABLE sessions ADD COLUMN label TEXT;"); }
   catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+  try { db.exec("ALTER TABLE items ADD COLUMN source TEXT DEFAULT 'manual';"); }
+  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+  try { db.exec("ALTER TABLE items ADD COLUMN friction_category TEXT;"); }
+  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+  try { db.exec("ALTER TABLE items ADD COLUMN friction_tool TEXT;"); }
+  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+  try { db.exec("ALTER TABLE items ADD COLUMN friction_key TEXT;"); }
+  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+  try { db.exec("ALTER TABLE items ADD COLUMN occurrence_count INTEGER DEFAULT 1;"); }
+  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+  try { db.exec("ALTER TABLE items ADD COLUMN first_seen_at TEXT;"); }
+  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+  try { db.exec("ALTER TABLE items ADD COLUMN last_seen_at TEXT;"); }
+  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_friction_dedupe ON items(session_id, status, friction_key);");
+  db.prepare(
+    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
+  ).run("friction_capture_enabled", "1");
   // Note: a legacy `pinned` column may exist on older installs. We never read
   // or write it — pinning was removed; the viewer is dismissed by closing the
   // window, and re-opens automatically when new items are added or
@@ -101,6 +132,18 @@ export function setSessionLabel(sessionId, label) {
 export function getSessionLabel(sessionId) {
   const row = db.prepare("SELECT label FROM sessions WHERE id = ?").get(sessionId);
   return row?.label || null;
+}
+
+export function getSetting(key, fallback = null) {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key);
+  return row?.value ?? fallback;
+}
+
+export function setSetting(key, value) {
+  db.prepare(
+    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) " +
+    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP"
+  ).run(key, String(value));
 }
 
 export function listSessions() {

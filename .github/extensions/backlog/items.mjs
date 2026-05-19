@@ -63,6 +63,21 @@ export function reorderPositions(sessionId) {
   items.forEach((item, idx) => update.run(idx + 1, item.id));
 }
 
+export function reorderFrictionLane(sessionId) {
+  const items = db.prepare(`
+    SELECT id, source
+    FROM items
+    WHERE session_id = ? AND status = ?
+    ORDER BY
+      CASE WHEN source = 'friction' THEN 1 ELSE 0 END,
+      CASE WHEN source = 'friction' THEN datetime(COALESCE(last_seen_at, created_at)) END DESC,
+      CASE WHEN source = 'friction' THEN COALESCE(occurrence_count, 1) END DESC,
+      position
+  `).all(sessionId, "pending");
+  const update = db.prepare("UPDATE items SET position = ? WHERE id = ?");
+  items.forEach((item, idx) => update.run(idx + 1, item.id));
+}
+
 export function getPendingCount(sessionId) {
   return db.prepare(
     "SELECT COUNT(*) as count FROM items WHERE session_id = ? AND status = ?"
@@ -89,13 +104,97 @@ export function addItem(sessionId, description, isTop = false) {
       position = getNextPosition(sessionId);
     }
     db.prepare(
-      "INSERT INTO items (id, session_id, description, position) VALUES (?, ?, ?, ?)"
-    ).run(id, sessionId, description, position);
+      "INSERT INTO items (id, session_id, description, position, source) VALUES (?, ?, ?, ?, ?)"
+    ).run(id, sessionId, description, position, "manual");
     return { id, position };
   });
   // New item should re-open the viewer even if the user previously dismissed
   // it, so they see the work piling up.
   clearViewerSuppression();
+  sidecarBroadcast(sessionId);
+  return out;
+}
+
+export function appendItemContext(itemId, context) {
+  const payload = JSON.stringify(context || {});
+  db.prepare(
+    "INSERT INTO item_contexts (item_id, context_json) VALUES (?, ?)"
+  ).run(itemId, payload);
+  const oldRows = db.prepare(`
+    SELECT id FROM item_contexts
+    WHERE item_id = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT -1 OFFSET 5
+  `).all(itemId);
+  const del = db.prepare("DELETE FROM item_contexts WHERE id = ?");
+  oldRows.forEach((row) => del.run(row.id));
+}
+
+export function getLatestItemContext(itemId) {
+  const row = db.prepare(`
+    SELECT context_json
+    FROM item_contexts
+    WHERE item_id = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `).get(itemId);
+  if (!row) return null;
+  try { return JSON.parse(row.context_json); }
+  catch { return null; }
+}
+
+export function addFrictionItem(sessionId, friction) {
+  const now = new Date().toISOString();
+  const out = tx(() => {
+    ensureSession(sessionId);
+    const existing = db.prepare(`
+      SELECT *
+      FROM items
+      WHERE session_id = ? AND status = ? AND source = ? AND friction_key = ?
+      ORDER BY created_at
+      LIMIT 1
+    `).get(sessionId, "pending", "friction", friction.key);
+    if (existing) {
+      const count = (existing.occurrence_count || 1) + 1;
+      db.prepare(`
+        UPDATE items
+        SET occurrence_count = ?,
+            last_seen_at = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(count, now, existing.id);
+      appendItemContext(existing.id, friction.context);
+      reorderFrictionLane(sessionId);
+      const updated = db.prepare("SELECT * FROM items WHERE id = ?").get(existing.id);
+      return { item: updated, created: false };
+    }
+
+    const id = generateId(friction.description);
+    const position = getNextPosition(sessionId);
+    db.prepare(`
+      INSERT INTO items (
+        id, session_id, description, position, source, friction_category,
+        friction_tool, friction_key, occurrence_count, first_seen_at, last_seen_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      sessionId,
+      friction.description,
+      position,
+      "friction",
+      friction.category,
+      friction.tool,
+      friction.key,
+      1,
+      now,
+      now,
+    );
+    appendItemContext(id, friction.context);
+    reorderFrictionLane(sessionId);
+    const created = db.prepare("SELECT * FROM items WHERE id = ?").get(id);
+    return { item: created, created: true };
+  });
+  if (out.created) clearViewerSuppression();
   sidecarBroadcast(sessionId);
   return out;
 }

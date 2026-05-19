@@ -3,7 +3,7 @@
 // `parseBacklogCommand` is pure and exported separately so tests can
 // validate flag handling without spinning up a session.
 
-import { db, ensureSession, listSessions, pruneSessions } from "./db.mjs";
+import { db, ensureSession, getSetting, listSessions, pruneSessions, setSetting } from "./db.mjs";
 import {
   addItem,
   markDone,
@@ -105,7 +105,23 @@ export function handleBacklogCommand(sessionId, rawText) {
       showViewer(sessionId);
       return "Backlog viewer opened. Close the window to dismiss it.";
     }
+    case "friction": {
+      const sub = args[0] || "status";
+      if (sub === "on") {
+        setSetting("friction_capture_enabled", "1");
+        return "Friction capture is on. Tier-1 hard failures can auto-add backlog items.";
+      }
+      if (sub === "off") {
+        setSetting("friction_capture_enabled", "0");
+        return "Friction capture is off. Existing friction items remain in the backlog.";
+      }
+      if (sub === "status") {
+        const enabled = getSetting("friction_capture_enabled", "1") !== "0";
+        return `Friction capture is ${enabled ? "on" : "off"}.`;
+      }
+      return "Usage: /backlog friction on|off|status";
+    }
     default:
-      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show`;
+      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, friction`;
   }
 }

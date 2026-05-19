@@ -15,6 +15,10 @@ assertEqual(p2.args.join(" "), "urgent thing", "--top stripped from args");
 const p3 = parseBacklogCommand("");
 assertEqual(p3.cmd, "list", "empty input defaults to list");
 
+const p4 = parseBacklogCommand("friction status");
+assertEqual(p4.cmd, "friction", "friction command parsed");
+assertEqual(p4.args[0], "status", "friction subcommand parsed");
+
 // Dispatcher — exercise a couple of command paths against the test DB
 const sid = "test-cmd-session";
 const addOut = handleBacklogCommand(sid, "add hello world");

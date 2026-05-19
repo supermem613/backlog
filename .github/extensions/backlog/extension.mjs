@@ -43,6 +43,7 @@ import {
   makeSessionEndBanner,
 } from "./prompt.mjs";
 import { handleBacklogCommand } from "./commands.mjs";
+import { initFrictionCapture } from "./friction.mjs";
 
 // initBacklog() must run before any module touches `db`. db.mjs uses
 // `export let db = null` — once we wire in the real handle here, every
@@ -171,6 +172,7 @@ const session = await joinSession({
 // session is now available — wire it into sidecar so /api/engage can call session.send.
 setSessionRef(session);
 setActiveSession(session.sessionId || session.id);
+initFrictionCapture(session, () => activeSessionId);
 // Seed a label from cwd if we don't already have one — covers extension
 // reloads where session.start has long since fired and won't replay.
 if (activeSessionId && !getSessionLabel(activeSessionId)) {

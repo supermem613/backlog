@@ -1,10 +1,14 @@
 # copilot-cli-backlog
 
-A GitHub Copilot CLI extension that gives every session a **persistent task backlog** with deterministic slash commands, in-conversation tools the agent can call, and a chromeless sidecar viewer for one-click control.
+A GitHub Copilot CLI extension that gives every session a **persistent task backlog** with deterministic slash commands, in-conversation tools the agent can call, hard-error friction capture, and a chromeless sidecar viewer for one-click control.
 
-The agent and the human share the same backlog: you can `/backlog add` something while the agent is working, the agent can call `backlog_next` after completing a step to pick up the next item, and the sidecar window shows a live, click-to-engage list across all your active Copilot CLI sessions.
+The agent and the human share the same backlog: you can `/backlog add` something while the agent is working, the agent can call `backlog_next` after completing a step to pick up the next item, and the sidecar window shows a live, click-to-engage list across all your active Copilot CLI sessions. When Copilot CLI hits stable tooling friction, backlog can also promote that failure into a follow-up item with redacted provenance.
 
 Backlog persists in a SQLite database at `~/.backlog/backlog.db` (zero deps — uses Node 24's built-in `node:sqlite`), so items survive across sessions and even across machine restarts.
+
+## Sidecar preview
+
+![Backlog sidecar showing a friction item and the Friction ON toggle](docs/screenshots/backlog-sidecar-friction.svg)
 
 ## Install
 
@@ -92,9 +96,18 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 /backlog show                       # open the sidecar window
 /backlog sessions                   # list all sessions with pending items
 /backlog prune [days]               # drop sessions not accessed in N days (default 7)
+/backlog friction on|off|status     # control Tier-1 hard-error auto-capture
 ```
 
 Items can be referenced by short ID (e.g. `t1a2b3`) or by position number (e.g. `2`).
+
+### Friction capture
+
+Backlog can auto-add Tier-1 hard failures it observes from Copilot CLI tool events. It keeps only a small in-memory rolling buffer for recent context, then persists an item plus a redacted context envelope when a stable hard-error class fires, such as permission denied, command not found, auth expired, timeout, content exclusion, shell failure, or tool protocol/schema failure.
+
+Auto-detected items are marked as friction provenance in the sidecar and deduped by session, cwd, tool, category, and normalized error signature. Repeated occurrences update the existing item, attach the latest context, and move it within the friction lane below manually-added work.
+
+Friction capture defaults to **on**. Use the **Friction ON/OFF** button in the sidecar toolbar, `/backlog friction off` to disable auto-adds, `/backlog friction on` to re-enable them, and `/backlog friction status` to check the current state.
 
 ### Agent-callable tools
 
@@ -112,7 +125,9 @@ Backlog avoids elevated extension capabilities: it does not skip tool permission
 
 ### Sidecar viewer
 
-`/backlog show` (or any session activity once the sidecar is running) opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer shows every active session's backlog in real time, lets you click any item to ask the agent to engage on it, and exposes Pause / Resume / Clear / Close controls that work mid-turn (they hit a localhost HTTP endpoint that bypasses the host's slash-command queue).
+`/backlog show` (or any session activity once the sidecar is running) opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer shows every active session's backlog in real time, lets you click any item to ask the agent to engage on it, and exposes toolbar controls for burndown mode, friction auto-promotion, and viewer refresh.
+
+Friction items are visually separated with an amber border, provenance chip, occurrence count, and the latest redacted error context. Manual items stay above the auto-detected friction lane, so tooling follow-ups never outrank user-directed work.
 
 A single sidecar window is shared across **all** Copilot CLI sessions on the machine — owner election happens via a lock file at `~/.backlog/viewer.lock`. If the owning session goes away, another active session takes over automatically.
 
@@ -122,7 +137,7 @@ A single sidecar window is shared across **all** Copilot CLI sessions on the mac
 git clone https://github.com/supermem613/copilot-cli-backlog.git
 cd copilot-cli-backlog
 npm run check    # node --check on every .mjs
-npm test         # 6 test files, 42 assertions
+npm test         # 7 test files, 60 assertions
 ```
 
 To run your local working tree as the live extension (instead of the installed plugin), drop a one-line shim at `~/.copilot/extensions/backlog/extension.mjs` that dynamic-imports your working tree. **Do not** point the directory itself at the working tree with a junction or symlink — Copilot CLI's extension loader does not pick those up.
@@ -160,6 +175,7 @@ copilot-cli-backlog/
 ├── .github/
 │   ├── extensions/backlog/    SDK extension: db, items, sidecar, commands, prompt, extension + viewer.html + favicon.svg + tests
 │   └── workflows/ci.yml       Cross-platform CI: node --check + tests on Node 24
+├── docs/screenshots/          README images
 ├── scripts/
 │   └── install-extension-shim.mjs   Writes the user-scoped delegate after plugin install
 ├── skills/

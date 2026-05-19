@@ -21,9 +21,10 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as net_module from "node:net";
 
-import { db, BACKLOG_DIR, setSessionLabel, getSessionLabel } from "./db.mjs";
+import { db, BACKLOG_DIR, getSetting, setSetting, setSessionLabel, getSessionLabel } from "./db.mjs";
 import {
   addItem,
+  getLatestItemContext,
   moveTop,
   moveUp,
   moveDown,
@@ -124,9 +125,16 @@ export function setActiveSessionId(id) { sidecarState.activeSessionId = id; }
 export function setSessionRef(ref)     { sidecarState.sessionRef = ref; }
 
 export function getCurrentItems(sessionId) {
-  return db.prepare(
-    "SELECT id, description, position, created_at FROM items WHERE session_id = ? AND status = ? ORDER BY position"
-  ).all(sessionId, "pending");
+  return db.prepare(`
+    SELECT id, description, position, created_at, source, friction_category,
+           friction_tool, occurrence_count, first_seen_at, last_seen_at
+    FROM items
+    WHERE session_id = ? AND status = ?
+    ORDER BY position
+  `).all(sessionId, "pending").map((item) => ({
+    ...item,
+    latest_context: item.source === "friction" ? getLatestItemContext(item.id) : null,
+  }));
 }
 
 // ---- Lock file (owner identity for failover) ----
@@ -229,6 +237,7 @@ export function buildSnapshot(activeSessionIdHint) {
   return {
     type: "snapshot",
     activeSessionId: activeSessionIdHint || sessions.find(s => s.live)?.id || sessions[0]?.id || null,
+    frictionCaptureEnabled: getSetting("friction_capture_enabled", "1") !== "0",
     sessions,
   };
 }
@@ -534,6 +543,17 @@ async function handleHttp(req, res) {
     setBurndown(sid, !!body.enabled);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, enabled: sidecarState.burndown.has(sid) }));
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/friction") {
+    let body;
+    try { body = await readJsonBody(req); }
+    catch { res.writeHead(400); res.end("bad body"); return; }
+    if (body.token !== sidecarState.token) { res.writeHead(401); res.end("unauthorized"); return; }
+    setSetting("friction_capture_enabled", body.enabled ? "1" : "0");
+    ownerRefresh();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, enabled: getSetting("friction_capture_enabled", "1") !== "0" }));
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/mutate") {
