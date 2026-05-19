@@ -35,7 +35,9 @@ try {
     if (fs.existsSync(targetExtension)) {
         const existing = fs.readFileSync(targetExtension, "utf8");
         if (existing === content) {
+            await runSourceSmoke(sourceExtension);
             console.log(`backlog extension shim is already installed at ${targetExtension}`);
+            console.log("Friction delete smoke check passed.");
             process.exit(0);
         }
         if (!existing.includes(extensionName)) {
@@ -45,8 +47,10 @@ try {
 
     fs.mkdirSync(targetDirectory, { recursive: true });
     fs.writeFileSync(targetExtension, content);
+    await runSourceSmoke(sourceExtension);
     console.log(`Installed backlog extension shim at ${targetExtension}`);
     console.log(`Shim imports ${pathToFileURL(sourceExtension).href}`);
+    console.log("Friction delete smoke check passed.");
 } catch (error) {
     console.error(`install-extension-shim: ${error.message}`);
     process.exitCode = 1;
@@ -96,5 +100,21 @@ function isJunction(_stat, dirPath) {
         return path.resolve(real) !== path.resolve(dirPath);
     } catch {
         return false;
+    }
+}
+
+async function runSourceSmoke(sourceExtension) {
+    const extensionDirectory = path.dirname(sourceExtension);
+    const dbModule = await import(pathToFileURL(path.join(extensionDirectory, "db.mjs")).href);
+    const smokeDir = fs.mkdtempSync(path.join(os.tmpdir(), "backlog-install-smoke-"));
+    try {
+        dbModule.initBacklog(smokeDir);
+        const doctor = await import(pathToFileURL(path.join(extensionDirectory, "doctor.mjs")).href);
+        const smoke = doctor.runFrictionDeleteSmoke("install");
+        if (!smoke.ok) {
+            throw new Error(`friction delete smoke failed; ${smoke.contexts} context row(s) remain`);
+        }
+    } finally {
+        fs.rmSync(smokeDir, { recursive: true, force: true });
     }
 }

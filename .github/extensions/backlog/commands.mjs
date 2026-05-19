@@ -20,6 +20,7 @@ import {
   showViewer,
   tryStartSidecar,
 } from "./sidecar.mjs";
+import { formatDoctorReport } from "./doctor.mjs";
 
 export function parseBacklogCommand(rawText) {
   const parts = (rawText || "").trim().split(/\s+/);
@@ -104,6 +105,9 @@ export function handleBacklogCommand(sessionId, rawText) {
       showViewer(sessionId);
       return "Backlog viewer opened. Close the window to dismiss it.";
     }
+    case "doctor": {
+      return formatDoctorReport();
+    }
     case "friction": {
       const sub = args[0] || "status";
       if (sub === "on") {
@@ -121,6 +125,6 @@ export function handleBacklogCommand(sessionId, rawText) {
       return "Usage: /backlog friction on|off|status";
     }
     default:
-      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, friction`;
+      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, doctor, friction`;
   }
 }

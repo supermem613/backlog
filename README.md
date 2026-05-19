@@ -94,6 +94,7 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 /backlog edit <id-or-position> <new-description>
 /backlog clear                      # delete every item in this session
 /backlog show                       # open the sidecar window
+/backlog doctor                     # show runtime provenance and run delete smoke check
 /backlog sessions                   # list all sessions with pending items
 /backlog prune [days]               # drop sessions not accessed in N days (default 7)
 /backlog friction on|off|status     # control Tier-1 hard-error auto-capture
@@ -108,6 +109,8 @@ Backlog can auto-add Tier-1 hard failures it observes from Copilot CLI tool even
 Auto-detected items are marked as friction provenance in the sidecar and deduped by session, cwd, tool, category, and normalized error signature. Repeated occurrences update the existing item, attach the latest context, and move it within the friction lane below manually-added work.
 
 Friction capture defaults to **on**. Use the **Friction ON/OFF** button in the sidecar toolbar, `/backlog friction off` to disable auto-adds, `/backlog friction on` to re-enable them, and `/backlog friction status` to check the current state.
+
+`/backlog doctor` reports the loaded extension path, package version, git commit, database cascade status, and runs a friction-item delete smoke check. Use it after upgrades or extension reloads to confirm the running extension is the one you expect.
 
 ### Agent-callable tools
 
@@ -128,6 +131,8 @@ Backlog avoids elevated extension capabilities: it does not skip tool permission
 `/backlog show` (or any session activity once the sidecar is running) opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer shows every active session's backlog in real time, lets you click any item to ask the agent to engage on it, and exposes toolbar controls for burndown mode, friction auto-promotion, and viewer refresh.
 
 Friction items are visually separated with an amber border, provenance chip, occurrence count, and the latest redacted error context. Manual items stay above the auto-detected friction lane, so tooling follow-ups never outrank user-directed work.
+
+The top bar shows the loaded package version, git commit, and whether `item_contexts` uses cascade deletes. Hover it to see the exact extension and package paths.
 
 A single sidecar window is shared across **all** Copilot CLI sessions on the machine — owner election happens via a lock file at `~/.backlog/viewer.lock`. If the owning session goes away, another active session takes over automatically.
 

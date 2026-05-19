@@ -70,6 +70,15 @@
   }
   .topbar .status.live .dot { background: var(--success); }
   .topbar .status.bad .dot  { background: var(--danger); }
+  .topbar .runtime {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
 
   .topbar .right {
     display: flex; align-items: center; gap: 10px;
@@ -351,6 +360,7 @@
     <div class="topbar">
       <span class="title">Backlog</span>
       <span class="right">
+        <span class="runtime" id="runtime" title="Runtime not loaded">runtime unknown</span>
         <span class="status" id="status"><span class="dot"></span>connecting…</span>
         <button type="button" class="burndown" id="burndown" title="Burndown mode: auto-engage the next item whenever one is marked done" aria-label="Toggle burndown" aria-pressed="false" disabled>🔥 Burndown</button>
         <button type="button" class="friction-toggle" id="friction-toggle" title="Auto-promote Tier-1 hard failures into backlog" aria-label="Toggle friction capture" aria-pressed="true">⚠ Friction ON</button>
@@ -376,6 +386,7 @@
   const TOKEN = params.get("token") || "";
 
   const status = document.getElementById("status");
+  const runtimeEl = document.getElementById("runtime");
   const rail   = document.getElementById("rail");
   const list   = document.getElementById("list");
   const toast  = document.getElementById("toast");
@@ -421,6 +432,20 @@
   function setStatus(label, cls) {
     status.className = "status " + (cls || "");
     status.innerHTML = '<span class="dot"></span>' + label;
+  }
+  function renderRuntime() {
+    const runtime = snapshot.runtime || {};
+    const version = runtime.version || "unknown";
+    const commit = runtime.commit || "unknown";
+    const cascade = runtime.itemContextCascade === false ? "cascade missing" : "cascade ok";
+    runtimeEl.textContent = `v${version} · ${commit} · ${cascade}`;
+    runtimeEl.title = [
+      `Version: ${version}`,
+      `Commit: ${commit}`,
+      `Cascade: ${cascade}`,
+      `Extension: ${runtime.extensionPath || "unknown"}`,
+      `Package: ${runtime.packagePath || "unknown"}`,
+    ].join("\n");
   }
   function showToast(msg, bad) {
     toast.textContent = msg;
@@ -702,6 +727,7 @@
     renderMain();
     renderBurndown();
     renderFrictionToggle();
+    renderRuntime();
   }
 
   function renderBurndown() {

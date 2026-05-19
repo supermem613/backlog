@@ -74,7 +74,7 @@ const session = await joinSession({
   commands: [
     {
       name: "backlog",
-      description: "Manage session task backlog: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show",
+      description: "Manage session task backlog: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, doctor",
       handler: (context) => {
         const sid = activeSessionId || "default";
         const rawText = context.args || "list";

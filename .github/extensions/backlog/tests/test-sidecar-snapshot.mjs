@@ -29,6 +29,7 @@ sidecarState.sessionState.set(liveSid, "idle");
 const snap = buildSnapshot(liveSid);
 assertEqual(snap.activeSessionId, liveSid, "activeSessionId pinned to hint");
 assertEqual(snap.frictionCaptureEnabled, true, "snapshot reports friction capture on by default");
+assertEqual(snap.runtime.itemContextCascade, true, "snapshot includes runtime cascade status");
 assertEqual(snap.sessions.length, 2, "snapshot has 2 sessions (1 live + 1 orphan)");
 
 const live = snap.sessions.find(s => s.id === liveSid);

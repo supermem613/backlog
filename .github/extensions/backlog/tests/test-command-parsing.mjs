@@ -29,5 +29,6 @@ assert(/hello world/.test(listOut), `list shows added item, got: ${listOut}`);
 
 const unknownOut = handleBacklogCommand(sid, "frobnicate");
 assert(/Unknown command/.test(unknownOut), "unknown command returns error message");
+assert(/friction delete smoke: ok/.test(handleBacklogCommand(sid, "doctor")), "doctor command runs smoke check");
 
 done("test-command-parsing");

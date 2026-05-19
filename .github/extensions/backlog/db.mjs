@@ -56,9 +56,8 @@ export function initBacklog(dirOverride) {
       item_id TEXT NOT NULL,
       context_json TEXT NOT NULL,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (item_id) REFERENCES items(id)
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
     );
-    CREATE INDEX IF NOT EXISTS idx_item_contexts_item ON item_contexts(item_id, created_at);
   `);
 
   // Idempotent migration: add label column if it doesn't already exist.
@@ -79,6 +78,8 @@ export function initBacklog(dirOverride) {
   catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
   try { db.exec("ALTER TABLE items ADD COLUMN last_seen_at TEXT;"); }
   catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+  migrateItemContextsCascade();
+  db.exec("CREATE INDEX IF NOT EXISTS idx_item_contexts_item ON item_contexts(item_id, created_at);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_friction_dedupe ON items(session_id, status, friction_key);");
   db.prepare(
     "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
@@ -89,6 +90,45 @@ export function initBacklog(dirOverride) {
   // /backlog show is invoked.
 
   return db;
+}
+
+export function itemContextCascadeEnabled() {
+  const rows = db.prepare("PRAGMA foreign_key_list(item_contexts)").all();
+  return rows.some((row) =>
+    row.table === "items" &&
+    row.from === "item_id" &&
+    row.to === "id" &&
+    String(row.on_delete || "").toUpperCase() === "CASCADE"
+  );
+}
+
+function migrateItemContextsCascade() {
+  if (itemContextCascadeEnabled()) return;
+  try {
+    db.exec("PRAGMA foreign_keys = OFF;");
+    db.exec("BEGIN IMMEDIATE;");
+    db.exec(`
+      CREATE TABLE item_contexts_next (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id TEXT NOT NULL,
+        context_json TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+      );
+      INSERT INTO item_contexts_next (id, item_id, context_json, created_at)
+      SELECT c.id, c.item_id, c.context_json, c.created_at
+      FROM item_contexts c
+      JOIN items i ON i.id = c.item_id;
+      DROP TABLE item_contexts;
+      ALTER TABLE item_contexts_next RENAME TO item_contexts;
+    `);
+    db.exec("COMMIT;");
+  } catch (e) {
+    try { db.exec("ROLLBACK;"); } catch {}
+    throw e;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
 }
 
 // Run a function inside an immediate transaction so multi-statement
