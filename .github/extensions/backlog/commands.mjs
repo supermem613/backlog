@@ -13,10 +13,10 @@ import {
   moveDown,
   getTopItem,
   getPendingCount,
+  clearSessionItems,
 } from "./items.mjs";
 import {
   sidecarState,
-  sidecarBroadcast,
   showViewer,
   tryStartSidecar,
 } from "./sidecar.mjs";
@@ -96,8 +96,7 @@ export function handleBacklogCommand(sessionId, rawText) {
       return count === 0 ? "No sessions to prune" : `Removed ${count} session(s) not accessed in ${days}+ days`;
     }
     case "clear": {
-      const result = db.prepare("DELETE FROM items WHERE session_id = ?").run(sessionId);
-      sidecarBroadcast(sessionId);
+      const result = clearSessionItems(sessionId);
       return `Cleared ${result.changes} item(s) from session`;
     }
     case "show": {

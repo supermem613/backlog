@@ -143,6 +143,10 @@ export function getLatestItemContext(itemId) {
   catch { return null; }
 }
 
+function deleteItemContexts(itemId) {
+  db.prepare("DELETE FROM item_contexts WHERE item_id = ?").run(itemId);
+}
+
 export function addFrictionItem(sessionId, friction) {
   const now = new Date().toISOString();
   const out = tx(() => {
@@ -230,6 +234,7 @@ export function removeItem(sessionId, ref) {
   const item = tx(() => {
     const it = resolveItemRef(ref, sessionId);
     if (!it) return null;
+    deleteItemContexts(it.id);
     db.prepare("DELETE FROM items WHERE id = ?").run(it.id);
     reorderPositions(sessionId);
     return it;
@@ -241,6 +246,16 @@ export function removeItem(sessionId, ref) {
     sidecarBroadcast(sessionId);
   }
   return item;
+}
+
+export function clearSessionItems(sessionId) {
+  const result = tx(() => {
+    const items = db.prepare("SELECT id FROM items WHERE session_id = ?").all(sessionId);
+    for (const item of items) deleteItemContexts(item.id);
+    return db.prepare("DELETE FROM items WHERE session_id = ?").run(sessionId);
+  });
+  sidecarBroadcast(sessionId);
+  return result;
 }
 
 export function moveTop(sessionId, ref) {

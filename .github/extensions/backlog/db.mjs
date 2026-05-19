@@ -159,6 +159,9 @@ export function pruneSessions(days = 7) {
   cutoff.setDate(cutoff.getDate() - days);
   const stale = db.prepare("SELECT id FROM sessions WHERE last_accessed < ?").all(cutoff.toISOString());
   for (const s of stale) {
+    db.prepare(
+      "DELETE FROM item_contexts WHERE item_id IN (SELECT id FROM items WHERE session_id = ?)"
+    ).run(s.id);
     db.prepare("DELETE FROM items WHERE session_id = ?").run(s.id);
     db.prepare("DELETE FROM sessions WHERE id = ?").run(s.id);
   }

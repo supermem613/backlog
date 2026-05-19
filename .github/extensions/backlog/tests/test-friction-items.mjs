@@ -1,7 +1,7 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
 import { db, getSetting } from "../db.mjs";
-import { addFrictionItem, addItem, getLatestItemContext } from "../items.mjs";
+import { addFrictionItem, addItem, getLatestItemContext, removeItem } from "../items.mjs";
 import { handleBacklogCommand } from "../commands.mjs";
 
 const sid = "test-friction-session";
@@ -39,6 +39,29 @@ const rows = db.prepare(
 ).all(sid, "pending");
 assertEqual(rows[0].description, "manual top", "manual item stays ahead of friction lane");
 assertEqual(rows[1].source, "friction", "friction item stays in friction lane");
+
+const removed = removeItem(sid, first.item.id);
+assertEqual(removed.id, first.item.id, "friction item with retained context can be removed");
+assertEqual(
+  db.prepare("SELECT COUNT(*) as count FROM item_contexts WHERE item_id = ?").get(first.item.id).count,
+  0,
+  "removing friction item deletes retained contexts",
+);
+
+const clearSid = "test-friction-clear-session";
+const clearItem = addFrictionItem(clearSid, {
+  key: "k-timeout",
+  category: "timeout",
+  tool: "powershell",
+  description: "Fix recurring timeout in powershell",
+  context: { primary_event: { error_message_redacted: "operation timed out" } },
+});
+assertEqual(handleBacklogCommand(clearSid, "clear"), "Cleared 1 item(s) from session", "clear removes friction items");
+assertEqual(
+  db.prepare("SELECT COUNT(*) as count FROM item_contexts WHERE item_id = ?").get(clearItem.item.id).count,
+  0,
+  "clear deletes retained friction contexts",
+);
 
 assertEqual(getSetting("friction_capture_enabled"), "1", "friction capture defaults on");
 assertEqual(handleBacklogCommand(sid, "friction status"), "Friction capture is on.", "friction status reports on");

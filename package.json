@@ -1,6 +1,6 @@
 {
   "name": "copilot-cli-backlog",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Copilot CLI extension for managing a per-session task backlog with friction capture and a live sidecar viewer.",
   "type": "module",
   "private": false,
