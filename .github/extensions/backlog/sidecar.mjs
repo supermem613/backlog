@@ -112,6 +112,8 @@ export const sidecarState = {
   // chip dot color and gates burndown auto-advance.
   // Defaults to "idle" on first sighting of a session.
   sessionState: new Map(),
+  deferViewerClose: 0,
+  deferredViewerClose: false,
   // Client-only:
   peerSocket: null,
   peerReconnectTimer: null,
@@ -288,10 +290,30 @@ function syncOwnerVisibility() {
   const windowAlive = sidecarState.wsClients.size > 0;
   const recentlySpawned = Date.now() - sidecarState.lastSpawnAt < 5000;
   if (!want) {
+    if (sidecarState.deferViewerClose > 0) {
+      sidecarState.deferredViewerClose = true;
+      return;
+    }
     closeViewerWindow();
     return;
   }
   if (!windowAlive && !recentlySpawned) spawnViewerWindow();
+}
+
+function deferViewerCloseUntilResponseFinishes(res) {
+  sidecarState.deferViewerClose++;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    sidecarState.deferViewerClose = Math.max(0, sidecarState.deferViewerClose - 1);
+    if (sidecarState.deferViewerClose === 0 && sidecarState.deferredViewerClose) {
+      sidecarState.deferredViewerClose = false;
+      setImmediate(syncOwnerVisibility);
+    }
+  };
+  if (typeof res.once === "function") res.once("finish", release);
+  else queueMicrotask(release);
 }
 
 // Cross-role entry point used by every mutation site. Routes based on role.
@@ -491,7 +513,7 @@ function readJsonBody(req, max = 65536) {
   });
 }
 
-async function handleHttp(req, res) {
+export async function handleHttp(req, res) {
   const url = new URL(req.url, "http://x");
   if (req.method === "GET" && url.pathname === "/") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
@@ -559,6 +581,7 @@ async function handleHttp(req, res) {
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/mutate") {
+    deferViewerCloseUntilResponseFinishes(res);
     let body;
     try { body = await readJsonBody(req); }
     catch { res.writeHead(400); res.end("bad body"); return; }

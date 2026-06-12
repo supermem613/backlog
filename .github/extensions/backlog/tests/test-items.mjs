@@ -41,6 +41,12 @@ const r = removeItem(sid, "second-task");
 assertEqual(r.description, "second task", "remove by id finds second task");
 assertEqual(getPendingCount(sid), 2, "pending count drops to 2 after remove");
 
+// numeric-leading ids are ids, not position refs
+const numericLeading = addItem(sid, "#2 parsePostHeaderAuthor regex is a task");
+const numericLeadingRemoved = removeItem(sid, numericLeading.id);
+assertEqual(numericLeadingRemoved.description, "#2 parsePostHeaderAuthor regex is a task", "remove by numeric-leading id finds the id");
+assertEqual(resolveItemRef("2", sid).description, "third task", "all-digit refs still resolve by position");
+
 // edit
 const e = editItem(sid, "1", "first task (edited)");
 assertEqual(e.description, "first task (edited)", "edit updates description");

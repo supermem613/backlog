@@ -44,8 +44,8 @@ export function getNextPosition(sessionId) {
 }
 
 export function resolveItemRef(ref, sessionId) {
-  const pos = parseInt(ref, 10);
-  if (!isNaN(pos)) {
+  if (/^\d+$/.test(String(ref || ""))) {
+    const pos = parseInt(ref, 10);
     return db.prepare(
       "SELECT * FROM items WHERE session_id = ? AND status = ? AND position = ?"
     ).get(sessionId, "pending", pos);
