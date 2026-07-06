@@ -90,6 +90,9 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 /backlog edit <id-or-position> <new-description>
 /backlog clear                      # delete every item in this session
 /backlog show                       # open the sidecar window
+/backlog approve <id>               # approve an autonomous item to start
+/backlog review                     # list autonomous outputs waiting for review
+/backlog review <id> approve|reject # accept or reject an autonomous item output
 /backlog doctor                     # show runtime provenance and run delete smoke check
 /backlog sessions                   # list all sessions with pending items
 /backlog prune [days]               # drop sessions not accessed in N days (default 7)

@@ -1,8 +1,9 @@
 import { buildLoopContinuationPrompt, detectBlocked, detectComplete } from "./loop-prompt.mjs";
 import { blockedItemState, canRunItem, completeItemState } from "./loop-state.mjs";
+import { formatHumanDecisionNotice, requestItemReview } from "./review-channel.mjs";
 import { createStore } from "./store.mjs";
 
-export function createLoopController({ session, store = createStore(), featureId, sessionId, repoRoot, worktreePath = null, log = () => {} }) {
+export function createLoopController({ session, store = createStore(), featureId, sessionId, repoRoot, worktreePath = null, log = () => {}, notify = log }) {
   let stopped = false;
   let inFlightItemId = null;
 
@@ -60,8 +61,10 @@ export function createLoopController({ session, store = createStore(), featureId
       const complete = detectComplete(content);
       if (complete) {
         store.transitionItem({ itemId: inFlightItemId, status: completeItemState(), actor: "loop" });
+        const reviewDecision = requestItemReview({ store, itemId: inFlightItemId, summary: complete, actor: "loop" });
         const current = store.getLoopState(featureId);
         await setLoop("needs_review", current?.continuations_fired || 0, false);
+        notify(formatHumanDecisionNotice([reviewDecision]));
         inFlightItemId = null;
         return { changed: true, status: "needs_review", summary: complete };
       }

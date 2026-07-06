@@ -1,5 +1,6 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
+import { db } from "../db.mjs";
 import { parseBacklogCommand, handleBacklogCommand } from "../commands.mjs";
 
 // Parser
@@ -25,6 +26,18 @@ assert(addOut.startsWith("Added: 'hello world'"), `add command returns confirmat
 
 const listOut = handleBacklogCommand(sid, "list");
 assert(/hello world/.test(listOut), `list shows added item, got: ${listOut}`);
+
+db.prepare("INSERT INTO areas (id, name) VALUES (?, ?)").run("cmd-area", "Command Area");
+db.prepare("INSERT INTO features (id, area_id, title, status) VALUES (?, ?, ?, ?)").run("cmd-feature", "cmd-area", "Command feature", "approved");
+const gatedId = addOut.match(/\[id: ([^\]]+)\]/)?.[1];
+db.prepare("UPDATE items SET feature_id = ?, status = ? WHERE id = ?").run("cmd-feature", "proposed", gatedId);
+const approveOut = handleBacklogCommand(sid, `approve ${gatedId}`);
+assert(/Approved start/.test(approveOut), `approve command opens start gate, got: ${approveOut}`);
+db.prepare("UPDATE items SET status = ? WHERE id = ?").run("needs_review", gatedId);
+const reviewListOut = handleBacklogCommand(sid, "review");
+assert(/Human backlog decision required/.test(reviewListOut), "review command lists pending decisions");
+const reviewOut = handleBacklogCommand(sid, `review ${gatedId} approve`);
+assert(/Approved review/.test(reviewOut), `review command approves output, got: ${reviewOut}`);
 
 const unknownOut = handleBacklogCommand(sid, "frobnicate");
 assert(/Unknown command/.test(unknownOut), "unknown command returns error message");

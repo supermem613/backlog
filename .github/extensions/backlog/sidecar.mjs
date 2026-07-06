@@ -34,6 +34,7 @@ import {
 } from "./items.mjs";
 import { makeEngagePrompt } from "./prompt.mjs";
 import { getRuntimeInfo } from "./doctor.mjs";
+import { listHumanDecisions } from "./review-channel.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -236,6 +237,7 @@ export function buildSnapshot(activeSessionIdHint) {
     type: "snapshot",
     activeSessionId: activeSessionIdHint || sessions.find(s => s.live)?.id || sessions[0]?.id || null,
     runtime: getRuntimeInfo(),
+    decisions: listHumanDecisions(),
     sessions,
   };
 }

@@ -1,5 +1,6 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
+import { db } from "../db.mjs";
 import { addItem } from "../items.mjs";
 import { buildSnapshot, sidecarState } from "../sidecar.mjs";
 
@@ -12,6 +13,10 @@ const orphanSid = "test-snapshot-orphan";
 addItem(liveSid, "live one");
 addItem(liveSid, "live two");
 addItem(orphanSid, "orphan one");
+const decision = addItem("test-snapshot-decision", "needs approval");
+db.prepare("INSERT INTO areas (id, name) VALUES (?, ?)").run("snapshot-area", "Snapshot Area");
+db.prepare("INSERT INTO features (id, area_id, title, status) VALUES (?, ?, ?, ?)").run("snapshot-feature", "snapshot-area", "Snapshot feature", "approved");
+db.prepare("UPDATE items SET feature_id = ?, status = ? WHERE id = ?").run("snapshot-feature", "proposed", decision.id);
 
 // Pretend liveSid is registered as a live peer. We don't need a real socket
 // for buildSnapshot — it only reads metadata fields. Use a sentinel object
@@ -28,6 +33,8 @@ sidecarState.sessionState.set(liveSid, "idle");
 const snap = buildSnapshot(liveSid);
 assertEqual(snap.activeSessionId, liveSid, "activeSessionId pinned to hint");
 assertEqual(snap.runtime.legacyStoragePresent, false, "snapshot includes legacy storage status");
+assertEqual(snap.decisions.length, 1, "snapshot includes human decision notifications");
+assertEqual(snap.decisions[0].itemId, decision.id, "snapshot decision points at gated item");
 assertEqual(snap.sessions.length, 2, "snapshot has 2 sessions (1 live + 1 orphan)");
 
 const live = snap.sessions.find(s => s.id === liveSid);

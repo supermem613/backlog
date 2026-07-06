@@ -14,6 +14,7 @@ const store = createStore();
 store.setItemGate({ itemId: item.id, gateKind: "start", state: "approved", actor: "test" });
 
 const sent = [];
+const notices = [];
 const controller = createLoopController({
   session: { send: async (payload) => sent.push(payload) },
   store,
@@ -22,6 +23,7 @@ const controller = createLoopController({
   repoRoot: "C:\\repo",
   worktreePath: "C:\\repo\\worktree",
   log: () => {},
+  notify: (message) => notices.push(message),
 });
 
 await controller.start();
@@ -46,6 +48,8 @@ const changed = await controller.onAssistantMessage("done\nMISSION_COMPLETE: ite
 assertEqual(changed.status, "needs_review", "completion token maps item to needs_review");
 assertEqual(db.prepare("SELECT status FROM items WHERE id = ?").get(item.id).status, "needs_review", "item waits for feature review after completion");
 assertEqual(store.getLoopState("loop-feature").status, "needs_review", "loop pauses at review gate");
+assertEqual(store.getGate("item", item.id, "review").state, "pending", "completion opens a pending review gate");
+assert(/\/backlog review/.test(notices.at(-1)), "completion notifies the human review channel");
 
 await controller.stop();
 assertEqual(store.getLoopState("loop-feature").status, "stopped", "controller stops cleanly");

@@ -21,6 +21,13 @@ import {
   tryStartSidecar,
 } from "./sidecar.mjs";
 import { formatDoctorReport } from "./doctor.mjs";
+import {
+  approveItemReview,
+  approveItemStart,
+  formatHumanDecisionNotice,
+  listHumanDecisions,
+  rejectItemReview,
+} from "./review-channel.mjs";
 
 export function parseBacklogCommand(rawText) {
   const parts = (rawText || "").trim().split(/\s+/);
@@ -105,10 +112,38 @@ export function handleBacklogCommand(sessionId, rawText) {
       showViewer(sessionId);
       return "Backlog viewer opened. Close the window to dismiss it.";
     }
+    case "approve": {
+      const id = args[0];
+      if (!id) return "Error: Item id required. Usage: /backlog approve <id>";
+      try {
+        const item = approveItemStart({ itemId: id, actor: "human-command" });
+        return `Approved start for '${item.description}' [id: ${item.id}]`;
+      } catch (e) {
+        return `Error: ${e.message}`;
+      }
+    }
+    case "review": {
+      if (args.length === 0) return formatHumanDecisionNotice(listHumanDecisions());
+      const id = args[0];
+      const verdict = (args[1] || "").toLowerCase();
+      if (verdict !== "approve" && verdict !== "reject") {
+        return "Error: Review verdict required. Usage: /backlog review <id> approve|reject";
+      }
+      try {
+        const item = verdict === "approve"
+          ? approveItemReview({ itemId: id, actor: "human-command" })
+          : rejectItemReview({ itemId: id, reason: args.slice(2).join(" "), actor: "human-command" });
+        return verdict === "approve"
+          ? `Approved review for '${item.description}' [id: ${item.id}]`
+          : `Rejected review for '${item.description}' [id: ${item.id}]`;
+      } catch (e) {
+        return `Error: ${e.message}`;
+      }
+    }
     case "doctor": {
       return formatDoctorReport();
     }
     default:
-      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, doctor`;
+      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, approve, review, doctor`;
   }
 }
