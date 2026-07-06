@@ -15,9 +15,8 @@ assertEqual(p2.args.join(" "), "urgent thing", "--top stripped from args");
 const p3 = parseBacklogCommand("");
 assertEqual(p3.cmd, "list", "empty input defaults to list");
 
-const p4 = parseBacklogCommand("friction status");
-assertEqual(p4.cmd, "friction", "friction command parsed");
-assertEqual(p4.args[0], "status", "friction subcommand parsed");
+const p4 = parseBacklogCommand("doctor");
+assertEqual(p4.cmd, "doctor", "doctor command parsed");
 
 // Dispatcher — exercise a couple of command paths against the test DB
 const sid = "test-cmd-session";
@@ -29,6 +28,6 @@ assert(/hello world/.test(listOut), `list shows added item, got: ${listOut}`);
 
 const unknownOut = handleBacklogCommand(sid, "frobnicate");
 assert(/Unknown command/.test(unknownOut), "unknown command returns error message");
-assert(/friction delete smoke: ok/.test(handleBacklogCommand(sid, "doctor")), "doctor command runs smoke check");
+assert(/item delete smoke: ok/.test(handleBacklogCommand(sid, "doctor")), "doctor command runs smoke check");
 
 done("test-command-parsing");

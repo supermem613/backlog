@@ -110,9 +110,9 @@ async function runSourceSmoke(sourceExtension) {
     try {
         dbModule.initBacklog(smokeDir);
         const doctor = await import(pathToFileURL(path.join(extensionDirectory, "doctor.mjs")).href);
-        const smoke = doctor.runFrictionDeleteSmoke("install");
+        const smoke = doctor.runItemDeleteSmoke("install");
         if (!smoke.ok) {
-            throw new Error(`friction delete smoke failed; ${smoke.contexts} context row(s) remain`);
+            throw new Error("item delete smoke failed");
         }
     } finally {
         fs.rmSync(smokeDir, { recursive: true, force: true });

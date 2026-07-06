@@ -43,7 +43,10 @@ import {
   makeSessionEndBanner,
 } from "./prompt.mjs";
 import { handleBacklogCommand } from "./commands.mjs";
-import { initFrictionCapture } from "./friction.mjs";
+import {
+  assertDeprivilegedJoinConfig,
+  createBacklogJoinConfig,
+} from "./join-config.mjs";
 
 // initBacklog() must run before any module touches `db`. db.mjs uses
 // `export let db = null` — once we wire in the real handle here, every
@@ -70,109 +73,26 @@ function logPendingOnEnd() {
   session.log(makeSessionEndBanner(count, items), { level: "warn" });
 }
 
-const session = await joinSession({
-  commands: [
-    {
-      name: "backlog",
-      description: "Manage session task backlog: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, doctor",
-      handler: (context) => {
-        const sid = activeSessionId || "default";
-        const rawText = context.args || "list";
-        const result = handleBacklogCommand(sid, rawText);
-        session.log(result);
-      },
-    },
-  ],
-
-  tools: [
-    {
-      name: "backlog_next",
-      description: "Get the next pending backlog item. Call this after completing a task to check for more work.",
-      parameters: { type: "object", properties: {} },
-      handler: async (_args, invocation) => {
-        const sid = invocation?.sessionId || activeSessionId || "default";
-        const item = getTopItem(sid);
-        if (!item) {
-          syncSidecarVisibility(sid);
-          return "Backlog is empty — no pending items.";
-        }
-        const count = getPendingCount(sid);
-        return JSON.stringify({ next: item.description, id: item.id, totalPending: count });
-      },
-    },
-    {
-      name: "backlog_list",
-      description: "List all pending backlog items for the current session.",
-      parameters: { type: "object", properties: {} },
-      handler: async (_args, invocation) => {
-        const sid = invocation?.sessionId || activeSessionId || "default";
-        ensureSession(sid);
-        syncSidecarVisibility(sid);
-        const items = db.prepare(
-          "SELECT id, description, position FROM items WHERE session_id = ? AND status = ? ORDER BY position"
-        ).all(sid, "pending");
-        if (items.length === 0) return "Backlog is empty";
-        return items.map((i) => `#${i.position} [${i.id}] ${i.description}`).join("\n");
-      },
-    },
-    {
-      name: "backlog_add",
-      description: "Add an item to the session backlog.",
-      parameters: {
-        type: "object",
-        properties: {
-          description: { type: "string", description: "Task description" },
-          top: { type: "boolean", description: "Add as top priority" },
-        },
-        required: ["description"],
-      },
-      handler: async (args, invocation) => {
-        const sid = invocation?.sessionId || activeSessionId || "default";
-        const { id, position } = addItem(sid, args.description, args.top || false);
-        return `Added: '${args.description}' [id: ${id}] (position ${position})`;
-      },
-    },
-    {
-      name: "backlog_done",
-      description: "Mark a backlog item as done by ID or position number.",
-      parameters: {
-        type: "object",
-        properties: {
-          ref: { type: "string", description: "Item ID or position number" },
-        },
-        required: ["ref"],
-      },
-      handler: async (args, invocation) => {
-        const sid = invocation?.sessionId || activeSessionId || "default";
-        const item = markDone(sid, args.ref);
-        if (!item) return `Error: Item '${args.ref}' not found`;
-        return `Marked '${item.description}' as done`;
-      },
-    },
-    {
-      name: "backlog_remove",
-      description: "Remove a backlog item without completing it.",
-      parameters: {
-        type: "object",
-        properties: {
-          ref: { type: "string", description: "Item ID or position number" },
-        },
-        required: ["ref"],
-      },
-      handler: async (args, invocation) => {
-        const sid = invocation?.sessionId || activeSessionId || "default";
-        const item = removeItem(sid, args.ref);
-        if (!item) return `Error: Item '${args.ref}' not found`;
-        return `Removed '${item.description}'`;
-      },
-    },
-  ],
+const joinConfig = createBacklogJoinConfig({
+  getActiveSessionId: () => activeSessionId,
+  log: (message, options) => session.log(message, options),
+  syncSidecarVisibility,
+  ensureSession,
+  getDb: () => db,
+  getTopItem,
+  getPendingCount,
+  addItem,
+  markDone,
+  removeItem,
+  handleBacklogCommand,
 });
+assertDeprivilegedJoinConfig(joinConfig);
+
+const session = await joinSession(joinConfig);
 
 // session is now available — wire it into sidecar so /api/engage can call session.send.
 setSessionRef(session);
 setActiveSession(session.sessionId || session.id);
-initFrictionCapture(session, () => activeSessionId);
 // Seed a label from cwd if we don't already have one — covers extension
 // reloads where session.start has long since fired and won't replay.
 if (activeSessionId && !getSessionLabel(activeSessionId)) {

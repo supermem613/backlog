@@ -1,6 +1,5 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
-import { setSetting } from "../db.mjs";
 import { addItem } from "../items.mjs";
 import { buildSnapshot, sidecarState } from "../sidecar.mjs";
 
@@ -28,8 +27,7 @@ sidecarState.sessionState.set(liveSid, "idle");
 
 const snap = buildSnapshot(liveSid);
 assertEqual(snap.activeSessionId, liveSid, "activeSessionId pinned to hint");
-assertEqual(snap.frictionCaptureEnabled, true, "snapshot reports friction capture on by default");
-assertEqual(snap.runtime.itemContextCascade, true, "snapshot includes runtime cascade status");
+assertEqual(snap.runtime.legacyStoragePresent, false, "snapshot includes legacy storage status");
 assertEqual(snap.sessions.length, 2, "snapshot has 2 sessions (1 live + 1 orphan)");
 
 const live = snap.sessions.find(s => s.id === liveSid);
@@ -45,9 +43,5 @@ assertEqual(orphan.items.length, 1, "orphan session items count");
 // process were to import sidecar again.
 sidecarState.peers.delete(liveSid);
 sidecarState.sessionState.delete(liveSid);
-
-setSetting("friction_capture_enabled", "0");
-const offSnap = buildSnapshot(liveSid);
-assertEqual(offSnap.frictionCaptureEnabled, false, "snapshot reflects friction capture setting");
 
 done("test-sidecar-snapshot");

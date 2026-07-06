@@ -104,18 +104,6 @@
   }
   .topbar .burndown.on:hover { background: #8fb8ff; border-color: #8fb8ff; }
   .topbar .burndown:disabled { opacity: 0.35; cursor: not-allowed; background: transparent; color: var(--muted); border-color: var(--border-soft); }
-  .topbar .friction-toggle {
-    background: transparent; border: 1px solid var(--border-soft);
-    color: var(--text-soft); border-radius: 4px;
-    padding: 3px 9px; font-size: 11px; line-height: 1;
-    display: inline-flex; align-items: center; gap: 5px;
-    transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
-  }
-  .topbar .friction-toggle:hover { background: #2a2d34; color: var(--text); border-color: var(--accent); }
-  .topbar .friction-toggle.on {
-    background: var(--warn); color: #0e0f12; border-color: var(--warn);
-  }
-
   /* ---------- Sidebar ---------- */
   .rail {
     background: var(--bg-rail);
@@ -238,9 +226,6 @@
   .card:hover { background: var(--bg-card-hov); border-color: var(--border-soft); }
   .card.top { background: var(--bg-top); border-color: var(--border-top); }
   .card.top:hover { background: var(--bg-top-hov); }
-  .card.friction { border-color: #6b4f1f; }
-  .card.friction.top { border-color: #8a651e; }
-
   .card .title-row {
     display: flex; align-items: flex-start; gap: 8px;
     cursor: pointer;
@@ -275,11 +260,6 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     flex: 1; min-width: 0;
-  }
-  .card .meta .friction-chip {
-    background: #3a2a12; color: var(--warn);
-    padding: 1px 6px; border-radius: 8px;
-    font-weight: 600; font-size: 9px;
   }
   .card .context {
     margin-top: 6px;
@@ -363,7 +343,6 @@
         <span class="runtime" id="runtime" title="Runtime not loaded">runtime unknown</span>
         <span class="status" id="status"><span class="dot"></span>connecting…</span>
         <button type="button" class="burndown" id="burndown" title="Burndown mode: auto-engage the next item whenever one is marked done" aria-label="Toggle burndown" aria-pressed="false" disabled>🔥 Burndown</button>
-        <button type="button" class="friction-toggle" id="friction-toggle" title="Auto-promote Tier-1 hard failures into backlog" aria-label="Toggle friction capture" aria-pressed="true">⚠ Friction ON</button>
         <button type="button" class="refresh" id="refresh" title="Reload viewer (picks up viewer.html changes)" aria-label="Refresh">↻</button>
       </span>
     </div>
@@ -395,7 +374,6 @@
   const addBtn   = document.getElementById("add-btn");
   const refreshBtn = document.getElementById("refresh");
   const burndownBtn = document.getElementById("burndown");
-  const frictionBtn = document.getElementById("friction-toggle");
 
   refreshBtn.addEventListener("click", async () => {
     try {
@@ -413,16 +391,6 @@
       await api("/api/burndown", { sessionId: session.id, enabled: next });
       showToast(next ? "burndown on — auto-engaging items" : "burndown off");
     } catch (e) { console.error(e); showToast("burndown toggle failed", true); }
-  });
-
-  frictionBtn.addEventListener("click", async () => {
-    const next = !snapshot.frictionCaptureEnabled;
-    try {
-      const result = await api("/api/friction", { enabled: next });
-      snapshot.frictionCaptureEnabled = !!result.enabled;
-      renderFrictionToggle();
-      showToast(result.enabled ? "friction auto-promotion on" : "friction auto-promotion off");
-    } catch (e) { console.error(e); showToast("friction toggle failed", true); }
   });
 
   let intentionalClose = false;
@@ -617,7 +585,6 @@
       const isEngaging = session.engagingId === it.id;
       const klass = "card"
         + (isTop ? " top" : "")
-        + (it.source === "friction" ? " friction" : "")
         + (entry.editing ? " editing" : "")
         + (isEngaging ? " engaging" : "");
       if (entry.el.className !== klass) {
@@ -632,7 +599,6 @@
       if (entry.idEl.textContent !== it.id) entry.idEl.textContent = it.id;
       const ageText = relAge(it.created_at);
       if (entry.ageEl.textContent !== ageText) entry.ageEl.textContent = ageText;
-      updateFrictionMeta(entry, it);
       entry.upBtn.disabled = idx === 0;
       entry.downBtn.disabled = idx === items.length - 1;
       entry.position = it.position;
@@ -656,9 +622,9 @@
     const posEl = document.createElement("span"); posEl.className = "pos"; posEl.textContent = "#" + it.position;
     const idEl = document.createElement("span"); idEl.className = "id"; idEl.textContent = it.id;
     const ageEl = document.createElement("span"); ageEl.className = "age"; ageEl.textContent = relAge(it.created_at);
-    const frictionChip = document.createElement("span"); frictionChip.className = "friction-chip";
     const contextEl = document.createElement("div"); contextEl.className = "context";
-    meta.append(posEl, frictionChip, idEl, ageEl);
+    contextEl.style.display = "none";
+    meta.append(posEl, idEl, ageEl);
 
     const actions = document.createElement("div"); actions.className = "actions";
     actions.addEventListener("click", (e) => e.stopPropagation());
@@ -681,34 +647,14 @@
 
     const entry = {
       el: card, titleEl, posEl, idEl, ageEl,
-      frictionChip, contextEl,
+      contextEl,
       upBtn, downBtn, editBtn, delBtn,
       sessionId, itemRef: it, description: it.description,
       position: it.position, created_at: it.created_at,
       editing: false, live: true,
     };
     cardCache.set(it.id, entry);
-    updateFrictionMeta(entry, it);
     return entry;
-  }
-
-  function updateFrictionMeta(entry, it) {
-    const isFriction = it.source === "friction";
-    entry.frictionChip.style.display = isFriction ? "" : "none";
-    entry.contextEl.style.display = isFriction ? "" : "none";
-    if (!isFriction) return;
-    const category = (it.friction_category || "friction").replace(/_/g, " ");
-    const count = it.occurrence_count || 1;
-    const tool = it.friction_tool || "tool";
-    const chipText = `auto · ${category} · ${tool} · ${count}x`;
-    if (entry.frictionChip.textContent !== chipText) entry.frictionChip.textContent = chipText;
-    const event = it.latest_context?.primary_event || {};
-    const contextText = [
-      event.error_message_redacted || "",
-      it.last_seen_at ? `last seen ${relAge(it.last_seen_at)}` : "",
-      it.first_seen_at ? `first seen ${relAge(it.first_seen_at)}` : "",
-    ].filter(Boolean).join(" · ");
-    entry.contextEl.textContent = contextText || "auto-detected friction";
   }
 
   function renderAll() {
@@ -726,7 +672,6 @@
     renderRail();
     renderMain();
     renderBurndown();
-    renderFrictionToggle();
     renderRuntime();
   }
 
@@ -738,13 +683,6 @@
     burndownBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
     burndownBtn.disabled = !live;
     burndownBtn.textContent = enabled ? "🔥 Burndown ON" : "🔥 Burndown";
-  }
-
-  function renderFrictionToggle() {
-    const enabled = snapshot.frictionCaptureEnabled !== false;
-    frictionBtn.classList.toggle("on", enabled);
-    frictionBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
-    frictionBtn.textContent = enabled ? "⚠ Friction ON" : "⚠ Friction OFF";
   }
 
   function mkAction(glyph, title, onClick) {

@@ -7,13 +7,24 @@
 // All exports use ESM `export let` so the live binding mechanic lets every
 // other module see the singleton `db` once initBacklog has been called.
 
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 export let BACKLOG_DIR = null;
 export let db = null;
+
+const FRICTION_COLUMNS = [
+  "source",
+  "friction_category",
+  "friction_tool",
+  "friction_key",
+  "occurrence_count",
+  "first_seen_at",
+  "last_seen_at",
+];
 
 export function initBacklog(dirOverride) {
   if (db) return db;
@@ -51,39 +62,13 @@ export function initBacklog(dirOverride) {
       value TEXT NOT NULL,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE TABLE IF NOT EXISTS item_contexts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      item_id TEXT NOT NULL,
-      context_json TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
-    );
   `);
 
   // Idempotent migration: add label column if it doesn't already exist.
   // node:sqlite has no IF NOT EXISTS for ADD COLUMN, so try/catch the duplicate.
   try { db.exec("ALTER TABLE sessions ADD COLUMN label TEXT;"); }
   catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN source TEXT DEFAULT 'manual';"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN friction_category TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN friction_tool TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN friction_key TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN occurrence_count INTEGER DEFAULT 1;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN first_seen_at TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN last_seen_at TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  migrateItemContextsCascade();
-  db.exec("CREATE INDEX IF NOT EXISTS idx_item_contexts_item ON item_contexts(item_id, created_at);");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_friction_dedupe ON items(session_id, status, friction_key);");
-  db.prepare(
-    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
-  ).run("friction_capture_enabled", "1");
+  migrateRemoveFrictionStorage();
   // Note: a legacy `pinned` column may exist on older installs. We never read
   // or write it — pinning was removed; the viewer is dismissed by closing the
   // window, and re-opens automatically when new items are added or
@@ -93,6 +78,7 @@ export function initBacklog(dirOverride) {
 }
 
 export function itemContextCascadeEnabled() {
+  if (!tableExists("item_contexts")) return false;
   const rows = db.prepare("PRAGMA foreign_key_list(item_contexts)").all();
   return rows.some((row) =>
     row.table === "items" &&
@@ -102,33 +88,76 @@ export function itemContextCascadeEnabled() {
   );
 }
 
-function migrateItemContextsCascade() {
-  if (itemContextCascadeEnabled()) return;
-  try {
-    db.exec("PRAGMA foreign_keys = OFF;");
-    db.exec("BEGIN IMMEDIATE;");
-    db.exec(`
-      CREATE TABLE item_contexts_next (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_id TEXT NOT NULL,
-        context_json TEXT NOT NULL,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
-      );
-      INSERT INTO item_contexts_next (id, item_id, context_json, created_at)
-      SELECT c.id, c.item_id, c.context_json, c.created_at
-      FROM item_contexts c
-      JOIN items i ON i.id = c.item_id;
-      DROP TABLE item_contexts;
-      ALTER TABLE item_contexts_next RENAME TO item_contexts;
-    `);
-    db.exec("COMMIT;");
-  } catch (e) {
-    try { db.exec("ROLLBACK;"); } catch {}
-    throw e;
-  } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+export function tableExists(name) {
+  return !!db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?"
+  ).get(name);
+}
+
+export function itemColumns() {
+  return db.prepare("PRAGMA table_info(items)").all().map((row) => row.name);
+}
+
+export function frictionStoragePresent() {
+  const columns = new Set(itemColumns());
+  return FRICTION_COLUMNS.some((column) => columns.has(column)) || tableExists("item_contexts");
+}
+
+export const legacyStoragePresent = frictionStoragePresent;
+
+function readFrictionArchiveRows() {
+  const columns = new Set(itemColumns());
+  const hasSource = columns.has("source");
+  const frictionRows = hasSource
+    ? db.prepare("SELECT * FROM items WHERE source = ?").all("friction")
+    : [];
+  const contextRows = tableExists("item_contexts")
+    ? db.prepare("SELECT * FROM item_contexts ORDER BY id").all()
+    : [];
+  return { frictionRows, contextRows };
+}
+
+export function exportFrictionArchive(label = "migration") {
+  const archiveDir = join(BACKLOG_DIR, "archive");
+  mkdirSync(archiveDir, { recursive: true });
+  const { frictionRows, contextRows } = readFrictionArchiveRows();
+  const createdAt = new Date().toISOString();
+  const lines = [
+    JSON.stringify({ type: "meta", label, created_at: createdAt }),
+    ...frictionRows.map((row) => JSON.stringify({ type: "item", row })),
+    ...contextRows.map((row) => JSON.stringify({ type: "item_context", row })),
+  ];
+  const payload = `${lines.join("\n")}\n`;
+  const checksum = createHash("sha256").update(payload).digest("hex");
+  const stamp = createdAt.replace(/[:.]/g, "-");
+  const jsonlPath = join(archiveDir, `friction-removal-${stamp}.jsonl`);
+  const manifestPath = join(archiveDir, `friction-removal-${stamp}.manifest.json`);
+  writeFileSync(jsonlPath, payload, "utf8");
+  writeFileSync(manifestPath, JSON.stringify({
+    label,
+    created_at: createdAt,
+    jsonl_path: jsonlPath,
+    sha256: checksum,
+    friction_item_count: frictionRows.length,
+    item_context_count: contextRows.length,
+  }, null, 2), "utf8");
+  return { jsonlPath, manifestPath, checksum, frictionRows: frictionRows.length, contextRows: contextRows.length };
+}
+
+function migrateRemoveFrictionStorage() {
+  if (!frictionStoragePresent()) return null;
+  const archive = exportFrictionArchive("friction-removal");
+  db.exec("DROP INDEX IF EXISTS idx_friction_dedupe;");
+  db.exec("DROP INDEX IF EXISTS idx_item_contexts_item;");
+  db.exec("DROP TABLE IF EXISTS item_contexts;");
+  for (const column of FRICTION_COLUMNS) {
+    if (itemColumns().includes(column)) {
+      db.exec(`ALTER TABLE items DROP COLUMN ${column};`);
+    }
   }
+  db.prepare("DELETE FROM settings WHERE key = ?").run("friction_capture_enabled");
+  db.exec("PRAGMA user_version = 1;");
+  return archive;
 }
 
 // Run a function inside an immediate transaction so multi-statement
@@ -199,9 +228,6 @@ export function pruneSessions(days = 7) {
   cutoff.setDate(cutoff.getDate() - days);
   const stale = db.prepare("SELECT id FROM sessions WHERE last_accessed < ?").all(cutoff.toISOString());
   for (const s of stale) {
-    db.prepare(
-      "DELETE FROM item_contexts WHERE item_id IN (SELECT id FROM items WHERE session_id = ?)"
-    ).run(s.id);
     db.prepare("DELETE FROM items WHERE session_id = ?").run(s.id);
     db.prepare("DELETE FROM sessions WHERE id = ?").run(s.id);
   }
