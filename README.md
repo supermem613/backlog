@@ -123,7 +123,7 @@ Backlog avoids elevated extension capabilities: it does not skip tool permission
 
 ### Sidecar viewer
 
-`/backlog show` (or any session activity once the sidecar is running) opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer shows every active session's backlog in real time, lets you click any item to ask the agent to engage on it, and exposes toolbar controls for burndown mode and viewer refresh.
+`/backlog show` (or any session activity once the sidecar is running) opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer groups work by area and feature, keeps unassigned session items under Inbox, lets you click any item to ask the owning agent session to engage on it, and exposes toolbar controls for burndown mode and viewer refresh.
 
 The top bar shows the loaded package version, git commit, and storage status. Hover it to see the exact extension and package paths.
 

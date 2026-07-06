@@ -45,7 +45,7 @@
   /* ---------- Layout ---------- */
   .app {
     display: grid;
-    grid-template-columns: 168px 1fr;
+    grid-template-columns: 220px 1fr;
     grid-template-rows: 42px 1fr;
     height: 100vh;
   }
@@ -156,6 +156,30 @@
     flex-shrink: 0;
   }
   .chip.active .badge { background: var(--accent); color: #0e0f12; }
+  .area-label {
+    margin: 10px 8px 4px;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .feature-chip {
+    margin-left: 8px;
+  }
+  .feature-chip .label small {
+    display: block;
+    margin-top: 1px;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 400;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   /* ---------- Main ---------- */
   .main {
@@ -260,6 +284,13 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     flex: 1; min-width: 0;
+  }
+  .card .session {
+    color: var(--text-soft);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 170px;
   }
   .card .context {
     margin-top: 6px;
@@ -394,8 +425,9 @@
   });
 
   let intentionalClose = false;
-  let snapshot = { sessions: [], activeSessionId: null };
-  let activeId = null; // user's chosen partition; sticky across snapshots
+  let snapshot = { sessions: [], areas: [], activeSessionId: null };
+  let activeFeatureKey = null; // user's chosen area/feature bucket
+  let addSessionId = null;
 
   function setStatus(label, cls) {
     status.className = "status " + (cls || "");
@@ -455,7 +487,7 @@
 
   // --- Add ---
   addInput.addEventListener("input", () => {
-    addBtn.disabled = !activeId || addInput.value.trim().length === 0;
+    addBtn.disabled = !getAddSession() || addInput.value.trim().length === 0;
     autoGrow(addInput);
   });
   // Enter submits, Shift+Enter inserts a newline (rarely useful but harmless).
@@ -468,17 +500,21 @@
   addForm.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const desc = addInput.value.trim();
-    if (!desc || !activeId) return;
+    const addSession = getAddSession();
+    if (!desc || !addSession) return;
+    const selected = findActiveFeature();
+    const featureId = selected?.feature.id === "inbox" ? null : selected?.feature.id;
     addBtn.disabled = true; addInput.disabled = true;
     try {
-      await api("/api/mutate", { op: "add", sessionId: activeId, description: desc });
+      await api("/api/mutate", { op: "add", sessionId: addSession.id, description: desc, featureId });
       addInput.value = "";
       showToast("added");
     } catch (e) {
       console.error(e); showToast("add failed", true);
     } finally {
-      addInput.disabled = !activeId;
-      addBtn.disabled = !activeId || addInput.value.trim().length === 0;
+      const target = getAddSession();
+      addInput.disabled = !target;
+      addBtn.disabled = !target || addInput.value.trim().length === 0;
       autoGrow(addInput);
       addInput.focus();
     }
@@ -486,14 +522,41 @@
 
   // Keyed DOM caches so unchanged chips/cards aren't rebuilt — eliminates
   // the full-pane flicker on every mutation. Maps live in the closure.
-  const chipCache = new Map(); // sessionId -> { el, lbl, badge }
+  const chipCache = new Map(); // area/feature key -> { el, lbl, badge, sub }
   const cardCache = new Map(); // itemId   -> { el, titleEl, posEl, ageEl, idEl, description, position, top, age }
+
+  function featureKey(areaId, featureId) {
+    return areaId + "::" + featureId;
+  }
+
+  function findActiveFeature() {
+    for (const area of snapshot.areas || []) {
+      for (const feature of area.features || []) {
+        if (featureKey(area.id, feature.id) === activeFeatureKey) return { area, feature };
+      }
+    }
+    return null;
+  }
+
+  function getAddSession() {
+    const sessions = snapshot.sessions || [];
+    if (addSessionId && sessions.some((session) => session.id === addSessionId && session.live)) {
+      return sessions.find((session) => session.id === addSessionId);
+    }
+    const activeFeature = findActiveFeature();
+    const liveItemSessionId = activeFeature?.feature.items.find((item) => item.session_live)?.session_id;
+    const target = liveItemSessionId
+      ? sessions.find((session) => session.id === liveItemSessionId)
+      : sessions.find((session) => session.id === snapshot.activeSessionId && session.live) || sessions.find((session) => session.live);
+    addSessionId = target?.id || null;
+    return target || null;
+  }
 
   // --- Render rail (sidebar) ---
   function renderRail() {
-    const sessions = snapshot.sessions || [];
-    if (sessions.length === 0) {
-      rail.innerHTML = '<div class="empty">no sessions</div>';
+    const areas = snapshot.areas || [];
+    if (areas.length === 0) {
+      rail.innerHTML = '<div class="empty">no work</div>';
       chipCache.clear();
       return;
     }
@@ -501,63 +564,94 @@
     const placeholder = rail.querySelector(".empty");
     if (placeholder) placeholder.remove();
 
-    const liveIds = new Set(sessions.map(s => s.id));
-    // Remove chips for sessions that disappeared.
-    for (const [sid, entry] of chipCache) {
-      if (!liveIds.has(sid)) {
+    const liveKeys = new Set();
+    for (const area of areas) {
+      for (const feature of area.features || []) liveKeys.add(featureKey(area.id, feature.id));
+    }
+    for (const [key, entry] of chipCache) {
+      if (!liveKeys.has(key)) {
         entry.el.remove();
-        chipCache.delete(sid);
+        chipCache.delete(key);
       }
     }
 
-    sessions.forEach((s, idx) => {
-      const cached = chipCache.get(s.id);
-      const count = s.items.length;
+    let railIndex = 0;
+    areas.forEach((area) => {
+      let header = rail.querySelector(`[data-area="${area.id}"]`);
+      if (!header) {
+        header = document.createElement("div");
+        header.className = "area-label";
+        header.dataset.area = area.id;
+        const name = document.createElement("span");
+        const count = document.createElement("span");
+        header.append(name, count);
+      }
+      header.children[0].textContent = area.name;
+      header.children[1].textContent = String(area.itemCount || 0);
+      if (rail.children[railIndex] !== header) rail.insertBefore(header, rail.children[railIndex] || null);
+      railIndex += 1;
+
+      (area.features || []).forEach((feature) => {
+      const key = featureKey(area.id, feature.id);
+      const cached = chipCache.get(key);
+      const count = feature.items.length;
       if (!cached) {
         const chip = document.createElement("div");
-        chip.dataset.sid = s.id;
+        chip.dataset.featureKey = key;
         const dot = document.createElement("span"); dot.className = "live-dot";
         const lbl = document.createElement("span"); lbl.className = "label";
+        const text = document.createTextNode("");
+        const sub = document.createElement("small");
+        lbl.append(text, sub);
         const badge = document.createElement("span"); badge.className = "badge";
         chip.append(dot, lbl, badge);
-        chip.addEventListener("click", () => { activeId = s.id; renderAll(); });
+        chip.addEventListener("click", () => { activeFeatureKey = key; renderAll(); });
         rail.appendChild(chip);
-        chipCache.set(s.id, { el: chip, lbl, badge });
+        chipCache.set(key, { el: chip, lbl, text, sub, badge });
       }
-      const entry = chipCache.get(s.id);
-      const desiredClass = "chip"
-        + (s.id === activeId ? " active" : "")
-        + (s.live ? " live" : " dead")
-        + (s.live && s.state === "busy" ? " busy" : "");
+      const entry = chipCache.get(key);
+      const hasLive = feature.items.some((item) => item.session_live);
+      const hasBusy = feature.items.some((item) => item.session_live && item.session_state === "busy");
+      const desiredClass = "chip feature-chip"
+        + (key === activeFeatureKey ? " active" : "")
+        + (hasLive ? " live" : " dead")
+        + (hasBusy ? " busy" : "");
       if (entry.el.className !== desiredClass) entry.el.className = desiredClass;
-      const stateLabel = !s.live ? "offline" : (s.state === "busy" ? "busy" : "idle");
-      const title = (s.cwd || s.id) + " · " + stateLabel;
+      const stateLabel = !hasLive ? "offline" : (hasBusy ? "busy" : "idle");
+      const title = area.name + " / " + feature.title + " · " + stateLabel;
       if (entry.el.title !== title) entry.el.title = title;
-      if (entry.lbl.textContent !== s.label) entry.lbl.textContent = s.label;
+      if (entry.text.nodeValue !== feature.title) entry.text.nodeValue = feature.title;
+      const sessions = [...new Set(feature.items.map((item) => item.session_label))].join(", ");
+      if (entry.sub.textContent !== sessions) entry.sub.textContent = sessions;
       const countText = String(count);
       if (entry.badge.textContent !== countText) entry.badge.textContent = countText;
-      // Keep DOM order in sync with snapshot order.
-      const expected = rail.children[idx];
+      const expected = rail.children[railIndex];
       if (expected !== entry.el) rail.insertBefore(entry.el, expected || null);
+      railIndex += 1;
+      });
     });
+    while (rail.children.length > railIndex) rail.lastElementChild.remove();
   }
 
-  // --- Render main (active partition) ---
+  // --- Render main (active area/feature bucket) ---
   function renderMain() {
-    const session = (snapshot.sessions || []).find(s => s.id === activeId);
-    if (!session) {
-      list.innerHTML = '<div class="partition-empty">select a session</div>';
+    const selected = findActiveFeature();
+    const addSession = getAddSession();
+    if (!selected) {
+      list.innerHTML = '<div class="partition-empty">select a feature</div>';
       cardCache.clear();
       addInput.disabled = true; addBtn.disabled = true;
       return;
     }
-    addInput.disabled = false;
-    addBtn.disabled = addInput.value.trim().length === 0;
-    addInput.placeholder = `Add to ${session.label}…`;
+    addInput.disabled = !addSession;
+    addBtn.disabled = !addSession || addInput.value.trim().length === 0;
+    addInput.placeholder = addSession
+      ? `Add to ${selected.area.name} / ${selected.feature.title}…`
+      : "No live session available…";
 
-    const items = session.items || [];
+    const items = selected.feature.items || [];
     if (items.length === 0) {
-      list.innerHTML = '<div class="partition-empty">no items in this session</div>';
+      list.innerHTML = '<div class="partition-empty">no items in this feature</div>';
       cardCache.clear();
       return;
     }
@@ -567,7 +661,7 @@
 
     const seen = new Set(items.map(i => i.id));
     for (const [itemId, entry] of cardCache) {
-      if (!seen.has(itemId) || entry.sessionId !== session.id) {
+      if (!seen.has(itemId)) {
         entry.el.remove();
         cardCache.delete(itemId);
       }
@@ -576,13 +670,14 @@
     items.forEach((it, idx) => {
       const isTop = idx === 0;
       let entry = cardCache.get(it.id);
-      if (!entry) entry = createCard(session.id, it);
+      if (!entry) entry = createCard(it.session_id, it);
       // Reorder if needed.
       const expected = list.children[idx];
       if (expected !== entry.el) list.insertBefore(entry.el, expected || null);
       // Update fields in place. Authoritative engaging state comes from the
       // snapshot so burndown auto-engage looks the same as a manual click.
-      const isEngaging = session.engagingId === it.id;
+      const itemSession = (snapshot.sessions || []).find((session) => session.id === it.session_id);
+      const isEngaging = itemSession?.engagingId === it.id;
       const klass = "card"
         + (isTop ? " top" : "")
         + (entry.editing ? " editing" : "")
@@ -597,15 +692,16 @@
       const posText = "#" + it.position;
       if (entry.posEl.textContent !== posText) entry.posEl.textContent = posText;
       if (entry.idEl.textContent !== it.id) entry.idEl.textContent = it.id;
+      if (entry.sessionEl.textContent !== it.session_label) entry.sessionEl.textContent = it.session_label;
       const ageText = relAge(it.created_at);
       if (entry.ageEl.textContent !== ageText) entry.ageEl.textContent = ageText;
       entry.upBtn.disabled = idx === 0;
       entry.downBtn.disabled = idx === items.length - 1;
       entry.position = it.position;
       entry.created_at = it.created_at;
-      entry.sessionId = session.id;
+      entry.sessionId = it.session_id;
       entry.itemRef = it;
-      entry.live = session.live;
+      entry.live = it.session_live;
     });
   }
 
@@ -621,10 +717,11 @@
     const meta = document.createElement("div"); meta.className = "meta";
     const posEl = document.createElement("span"); posEl.className = "pos"; posEl.textContent = "#" + it.position;
     const idEl = document.createElement("span"); idEl.className = "id"; idEl.textContent = it.id;
+    const sessionEl = document.createElement("span"); sessionEl.className = "session"; sessionEl.textContent = it.session_label || sessionId;
     const ageEl = document.createElement("span"); ageEl.className = "age"; ageEl.textContent = relAge(it.created_at);
     const contextEl = document.createElement("div"); contextEl.className = "context";
     contextEl.style.display = "none";
-    meta.append(posEl, idEl, ageEl);
+    meta.append(posEl, idEl, sessionEl, ageEl);
 
     const actions = document.createElement("div"); actions.className = "actions";
     actions.addEventListener("click", (e) => e.stopPropagation());
@@ -646,7 +743,7 @@
     });
 
     const entry = {
-      el: card, titleEl, posEl, idEl, ageEl,
+      el: card, titleEl, posEl, idEl, sessionEl, ageEl,
       contextEl,
       upBtn, downBtn, editBtn, delBtn,
       sessionId, itemRef: it, description: it.description,
@@ -659,12 +756,14 @@
 
   function renderAll() {
     const sessions = snapshot.sessions || [];
-    // Pick a default active if none chosen, or if previous one disappeared.
-    if (!activeId || !sessions.find(s => s.id === activeId)) {
-      activeId = snapshot.activeSessionId
-        || (sessions.find(s => s.live)?.id)
-        || (sessions[0]?.id)
-        || null;
+    const areas = snapshot.areas || [];
+    if (!activeFeatureKey || !findActiveFeature()) {
+      const firstArea = areas[0];
+      const firstFeature = firstArea?.features?.[0];
+      activeFeatureKey = firstArea && firstFeature ? featureKey(firstArea.id, firstFeature.id) : null;
+    }
+    if (!addSessionId || !sessions.find((session) => session.id === addSessionId && session.live)) {
+      addSessionId = snapshot.activeSessionId || sessions.find((session) => session.live)?.id || null;
     }
     const total = sessions.reduce((n, s) => n + s.items.length, 0);
     setStatus(total + (total === 1 ? " item" : " items") + " · " + sessions.length + " session" + (sessions.length === 1 ? "" : "s"),
@@ -676,7 +775,7 @@
   }
 
   function renderBurndown() {
-    const session = (snapshot.sessions || []).find(s => s.id === activeId);
+    const session = getAddSession();
     const enabled = !!session?.burndown;
     const live = !!session?.live;
     burndownBtn.classList.toggle("on", enabled);

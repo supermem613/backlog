@@ -129,11 +129,78 @@ export function setSessionRef(ref)     { sidecarState.sessionRef = ref; }
 
 export function getCurrentItems(sessionId) {
   return db.prepare(`
-    SELECT id, description, position, created_at
+    SELECT id, description, position, feature_id, priority, status, created_at
     FROM items
     WHERE session_id = ? AND status = ?
     ORDER BY position
   `).all(sessionId, "pending");
+}
+
+function buildAreaSnapshot(sessions) {
+  const rows = db.prepare(`
+    SELECT
+      i.id,
+      i.session_id,
+      i.description,
+      i.position,
+      i.feature_id,
+      i.priority,
+      i.status,
+      i.created_at,
+      f.title AS feature_title,
+      f.status AS feature_status,
+      a.id AS area_id,
+      a.name AS area_name
+    FROM items i
+    LEFT JOIN features f ON f.id = i.feature_id
+    LEFT JOIN areas a ON a.id = f.area_id
+    WHERE i.status = ?
+    ORDER BY COALESCE(a.name, 'Inbox'), COALESCE(f.priority, 0) DESC, COALESCE(f.title, 'Inbox'), i.priority DESC, i.position
+  `).all("pending");
+  const sessionsById = new Map(sessions.map((session) => [session.id, session]));
+  const areas = new Map();
+
+  function ensureArea(id, name) {
+    if (!areas.has(id)) areas.set(id, { id, name, features: new Map(), itemCount: 0 });
+    return areas.get(id);
+  }
+
+  function ensureFeature(area, id, title, status) {
+    if (!area.features.has(id)) area.features.set(id, { id, title, status, items: [] });
+    return area.features.get(id);
+  }
+
+  for (const row of rows) {
+    const session = sessionsById.get(row.session_id) || {
+      id: row.session_id,
+      label: row.session_id.slice(0, 8),
+      live: false,
+      state: "offline",
+    };
+    const areaId = row.area_id || "inbox";
+    const area = ensureArea(areaId, row.area_name || "Inbox");
+    const featureId = row.feature_id || "inbox";
+    const feature = ensureFeature(area, featureId, row.feature_title || "Inbox", row.feature_status || "pending");
+    feature.items.push({
+      id: row.id,
+      session_id: row.session_id,
+      session_label: session.label,
+      session_live: !!session.live,
+      session_state: session.state,
+      description: row.description,
+      position: row.position,
+      feature_id: row.feature_id,
+      priority: row.priority,
+      status: row.status,
+      created_at: row.created_at,
+    });
+    area.itemCount += 1;
+  }
+
+  return [...areas.values()].map((area) => ({
+    ...area,
+    features: [...area.features.values()],
+  }));
 }
 
 // ---- Lock file (owner identity for failover) ----
@@ -236,8 +303,10 @@ export function buildSnapshot(activeSessionIdHint) {
   return {
     type: "snapshot",
     activeSessionId: activeSessionIdHint || sessions.find(s => s.live)?.id || sessions[0]?.id || null,
+    activeAreaId: null,
     runtime: getRuntimeInfo(),
     decisions: listHumanDecisions(),
+    areas: buildAreaSnapshot(sessions),
     sessions,
   };
 }
@@ -575,7 +644,7 @@ export async function handleHttp(req, res) {
     if (!sid) { res.writeHead(400); res.end("missing sessionId"); return; }
     let result = null;
     switch (body.op) {
-      case "add":    result = addItem(sid, body.description || "", false); break;
+      case "add":    result = addItem(sid, body.description || "", false, body.featureId || null); break;
       case "up":     result = moveUp(sid, body.id); break;
       case "down":   result = moveDown(sid, body.id); break;
       case "edit":   result = editItem(sid, body.id, body.description); break;

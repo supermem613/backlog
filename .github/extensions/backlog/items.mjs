@@ -75,7 +75,7 @@ export function getTopItem(sessionId) {
   ).get(sessionId, "pending");
 }
 
-export function addItem(sessionId, description, isTop = false) {
+export function addItem(sessionId, description, isTop = false, featureId = null) {
   const out = tx(() => {
     ensureSession(sessionId);
     const id = generateId(description);
@@ -89,8 +89,8 @@ export function addItem(sessionId, description, isTop = false) {
       position = getNextPosition(sessionId);
     }
     db.prepare(
-      "INSERT INTO items (id, session_id, description, position) VALUES (?, ?, ?, ?)"
-    ).run(id, sessionId, description, position);
+      "INSERT INTO items (id, session_id, description, position, feature_id) VALUES (?, ?, ?, ?, ?)"
+    ).run(id, sessionId, description, position, featureId);
     return { id, position };
   });
   // New item should re-open the viewer even if the user previously dismissed
