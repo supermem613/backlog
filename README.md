@@ -88,6 +88,8 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 /backlog up <id-or-position>        # move up one position
 /backlog down <id-or-position>      # move down one position
 /backlog edit <id-or-position> <new-description>
+/backlog sessions                   # list all sessions with pending items
+/backlog prune [days]               # drop sessions not accessed in N days (default 7)
 /backlog clear                      # delete every item in this session
 /backlog show                       # open the sidecar window
 /backlog approve <id>               # approve an autonomous item to start
@@ -99,8 +101,6 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 /backlog loop start <feature-id>    # start an approved feature loop
 /backlog loop stop <feature-id>     # stop an active feature loop
 /backlog doctor                     # show runtime provenance and run delete smoke check
-/backlog sessions                   # list all sessions with pending items
-/backlog prune [days]               # drop sessions not accessed in N days (default 7)
 ```
 
 Items can be referenced by short ID (e.g. `t1a2b3`) or by position number (e.g. `2`).
@@ -173,7 +173,6 @@ copilot-cli-backlog/
 ├── .github/
 │   ├── extensions/backlog/    SDK extension: db, items, sidecar, commands, prompt, extension + viewer.html + favicon.svg + tests
 │   └── workflows/ci.yml       Cross-platform CI: node --check + tests on Node 24
-├── docs/screenshots/          README images
 ├── scripts/
 │   └── install-extension-shim.mjs   Writes the user-scoped delegate after plugin install
 ├── skills/
