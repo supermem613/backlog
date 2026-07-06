@@ -1,7 +1,9 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
+import { join } from "node:path";
 import { db } from "../db.mjs";
 import { parseBacklogCommand, handleBacklogCommand } from "../commands.mjs";
+import { sandboxDir } from "./harness.mjs";
 
 // Parser
 const p1 = parseBacklogCommand("add buy milk");
@@ -38,6 +40,11 @@ const reviewListOut = handleBacklogCommand(sid, "review");
 assert(/Human backlog decision required/.test(reviewListOut), "review command lists pending decisions");
 const reviewOut = handleBacklogCommand(sid, `review ${gatedId} approve`);
 assert(/Approved review/.test(reviewOut), `review command approves output, got: ${reviewOut}`);
+const backupPath = join(sandboxDir, "command-backup.json");
+const backupOut = handleBacklogCommand(sid, `backup ${backupPath}`);
+assert(/Backlog backup written/.test(backupOut), `backup command writes backup, got: ${backupOut}`);
+const restoreOut = handleBacklogCommand(sid, `restore ${backupPath}`);
+assert(/Backlog backup restored/.test(restoreOut), `restore command restores backup, got: ${restoreOut}`);
 
 const unknownOut = handleBacklogCommand(sid, "frobnicate");
 assert(/Unknown command/.test(unknownOut), "unknown command returns error message");

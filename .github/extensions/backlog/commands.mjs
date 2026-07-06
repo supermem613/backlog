@@ -21,6 +21,7 @@ import {
   tryStartSidecar,
 } from "./sidecar.mjs";
 import { formatDoctorReport } from "./doctor.mjs";
+import { exportBacklogBackup, restoreBacklogBackup } from "./backup.mjs";
 import {
   approveItemReview,
   approveItemStart,
@@ -140,10 +141,27 @@ export function handleBacklogCommand(sessionId, rawText) {
         return `Error: ${e.message}`;
       }
     }
+    case "backup": {
+      try {
+        const out = exportBacklogBackup({ outputPath: args[0] || undefined });
+        return `Backlog backup written: ${out.path} (sha256 ${out.sha256})`;
+      } catch (e) {
+        return `Error: ${e.message}`;
+      }
+    }
+    case "restore": {
+      if (!args[0]) return "Error: Backup path required. Usage: /backlog restore <path>";
+      try {
+        const out = restoreBacklogBackup({ inputPath: args[0] });
+        return `Backlog backup restored: ${args[0]} (sha256 ${out.sha256})`;
+      } catch (e) {
+        return `Error: ${e.message}`;
+      }
+    }
     case "doctor": {
       return formatDoctorReport();
     }
     default:
-      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, approve, review, doctor`;
+      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, approve, review, backup, restore, doctor`;
   }
 }
