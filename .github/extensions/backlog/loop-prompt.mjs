@@ -1,5 +1,5 @@
-export const COMPLETE_TOKEN = "MISSION_COMPLETE:";
-export const BLOCKED_TOKEN = "MISSION_BLOCKED:";
+export const COMPLETE_TOKEN = "BACKLOG_COMPLETE:";
+export const BLOCKED_TOKEN = "BACKLOG_BLOCKED:";
 
 export function buildLoopContinuationPrompt({ feature, item, turn }) {
   return [

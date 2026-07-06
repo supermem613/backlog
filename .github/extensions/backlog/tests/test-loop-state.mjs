@@ -20,7 +20,7 @@ try {
 } catch {
   illegal = true;
 }
-assert(illegal, "MISSION_COMPLETE cannot transition directly to done");
+assert(illegal, "BACKLOG_COMPLETE cannot transition directly to done");
 assertEqual(completeItemState(), "needs_review", "complete maps to needs_review");
 assertEqual(blockedItemState(), "blocked", "blocked token maps to blocked");
 

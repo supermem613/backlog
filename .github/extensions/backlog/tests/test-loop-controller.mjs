@@ -33,7 +33,7 @@ assertEqual(store.getLease("loop-feature").run_epoch, 1, "controller creates epo
 const fired = await controller.onIdle();
 assertEqual(fired.fired, true, "idle fires one continuation");
 assertEqual(sent.length, 1, "session.send is called once");
-assert(/MISSION_COMPLETE:/.test(sent[0].prompt), "prompt includes completion token");
+assert(/BACKLOG_COMPLETE:/.test(sent[0].prompt), "prompt includes backlog completion token");
 assertEqual(db.prepare("SELECT status FROM items WHERE id = ?").get(item.id).status, "running", "item moves to running");
 
 const skipped = await controller.onIdle();
@@ -44,7 +44,7 @@ assertEqual(recoveryLease.status, "needs_recovery", "expired active work marks l
 assertEqual(db.prepare("SELECT status FROM items WHERE id = ?").get(item.id).status, "needs_recovery", "expired active work marks item needs recovery");
 
 db.prepare("UPDATE items SET status = ? WHERE id = ?").run("running", item.id);
-const changed = await controller.onAssistantMessage("done\nMISSION_COMPLETE: item implementation complete");
+const changed = await controller.onAssistantMessage("done\nBACKLOG_COMPLETE: item implementation complete");
 assertEqual(changed.status, "needs_review", "completion token maps item to needs_review");
 assertEqual(db.prepare("SELECT status FROM items WHERE id = ?").get(item.id).status, "needs_review", "item waits for feature review after completion");
 assertEqual(store.getLoopState("loop-feature").status, "needs_review", "loop pauses at review gate");
