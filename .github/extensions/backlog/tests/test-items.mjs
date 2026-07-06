@@ -8,6 +8,7 @@ import {
   moveUp,
   moveDown,
   editItem,
+  clearSessionItems,
   getTopItem,
   getPendingCount,
   resolveItemRef,
@@ -58,5 +59,12 @@ assert(eEmpty === null, "edit with whitespace-only description returns null");
 // resolveItemRef returns null for missing ids
 const missing = resolveItemRef("does-not-exist", sid);
 assert(!missing, "resolveItemRef returns falsy for missing id");
+
+const clearSid = "test-clear-session";
+addItem(clearSid, "clear one");
+addItem(clearSid, "clear two");
+const cleared = clearSessionItems(clearSid);
+assertEqual(cleared.changes, 2, "clear removes all session items");
+assertEqual(getPendingCount(clearSid), 0, "clear leaves no pending items");
 
 done("test-items");

@@ -63,7 +63,7 @@ try {
   assert.equal(dbModule.frictionStoragePresent(), false, "legacy friction storage is removed");
   assert.equal(dbModule.itemColumns().includes("friction_key"), false, "friction columns are dropped");
   assert.equal(dbModule.tableExists("item_contexts"), false, "item_contexts table is dropped");
-  assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 1, "user_version increments for friction removal");
+  assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 2, "user_version reaches current schema target");
   const archiveDir = join(sandboxDir, "archive");
   const manifestName = readdirSync(archiveDir).find((name) => name.endsWith(".manifest.json"));
   assert.ok(manifestName, "migration writes archive manifest");
@@ -73,7 +73,7 @@ try {
   assert.equal(manifest.friction_item_count, 1, "archive records legacy item count");
   assert.equal(manifest.item_context_count, 1, "archive records legacy context count");
   dbModule.initBacklog(sandboxDir);
-  assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 1, "migration is idempotent on re-run");
+  assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 2, "migration is idempotent on re-run");
   console.log("✓ test-db-migration: 10/10 assertions passed");
 } finally {
   try { migratedDb?.close(); } catch {}

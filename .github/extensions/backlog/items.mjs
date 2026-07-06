@@ -146,8 +146,6 @@ export function removeItem(sessionId, ref) {
 
 export function clearSessionItems(sessionId) {
   const result = tx(() => {
-    const items = db.prepare("SELECT id FROM items WHERE session_id = ?").all(sessionId);
-    for (const item of items) deleteItemContexts(item.id);
     return db.prepare("DELETE FROM items WHERE session_id = ?").run(sessionId);
   });
   sidecarBroadcast(sessionId);
