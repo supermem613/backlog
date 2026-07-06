@@ -13,7 +13,7 @@
 // every reference is inside a function body that runs after both
 // modules have finished initializing.
 
-import { db, tx, ensureSession } from "./db.mjs";
+import { db, tx, ensureSession, deleteItemDependentsByIds, deleteItemDependentsForSession } from "./db.mjs";
 import {
   sidecarState,
   sidecarBroadcast,
@@ -131,6 +131,7 @@ export function removeItem(sessionId, ref) {
   const item = tx(() => {
     const it = resolveItemRef(ref, sessionId);
     if (!it) return null;
+    deleteItemDependentsByIds([it.id]);
     db.prepare("DELETE FROM items WHERE id = ?").run(it.id);
     reorderPositions(sessionId);
     return it;
@@ -146,6 +147,7 @@ export function removeItem(sessionId, ref) {
 
 export function clearSessionItems(sessionId) {
   const result = tx(() => {
+    deleteItemDependentsForSession(sessionId);
     return db.prepare("DELETE FROM items WHERE session_id = ?").run(sessionId);
   });
   sidecarBroadcast(sessionId);

@@ -23,31 +23,34 @@ assertEqual(p4.cmd, "doctor", "doctor command parsed");
 
 // Dispatcher — exercise a couple of command paths against the test DB
 const sid = "test-cmd-session";
-const addOut = handleBacklogCommand(sid, "add hello world");
+const addOut = await handleBacklogCommand(sid, "add hello world");
 assert(addOut.startsWith("Added: 'hello world'"), `add command returns confirmation, got: ${addOut}`);
 
-const listOut = handleBacklogCommand(sid, "list");
+const listOut = await handleBacklogCommand(sid, "list");
 assert(/hello world/.test(listOut), `list shows added item, got: ${listOut}`);
+const firstId = addOut.match(/\[id: ([^\]]+)\]/)?.[1];
+const editOut = await handleBacklogCommand(sid, `edit ${firstId} hello edited`);
+assert(/Updated 'hello edited'/.test(editOut), `edit command updates item, got: ${editOut}`);
 
 db.prepare("INSERT INTO areas (id, name) VALUES (?, ?)").run("cmd-area", "Command Area");
 db.prepare("INSERT INTO features (id, area_id, title, status) VALUES (?, ?, ?, ?)").run("cmd-feature", "cmd-area", "Command feature", "approved");
-const gatedId = addOut.match(/\[id: ([^\]]+)\]/)?.[1];
+const gatedId = firstId;
 db.prepare("UPDATE items SET feature_id = ?, status = ? WHERE id = ?").run("cmd-feature", "proposed", gatedId);
-const approveOut = handleBacklogCommand(sid, `approve ${gatedId}`);
+const approveOut = await handleBacklogCommand(sid, `approve ${gatedId}`);
 assert(/Approved start/.test(approveOut), `approve command opens start gate, got: ${approveOut}`);
 db.prepare("UPDATE items SET status = ? WHERE id = ?").run("needs_review", gatedId);
-const reviewListOut = handleBacklogCommand(sid, "review");
+const reviewListOut = await handleBacklogCommand(sid, "review");
 assert(/Human backlog decision required/.test(reviewListOut), "review command lists pending decisions");
-const reviewOut = handleBacklogCommand(sid, `review ${gatedId} approve`);
+const reviewOut = await handleBacklogCommand(sid, `review ${gatedId} approve`);
 assert(/Approved review/.test(reviewOut), `review command approves output, got: ${reviewOut}`);
 const backupPath = join(sandboxDir, "command-backup.json");
-const backupOut = handleBacklogCommand(sid, `backup ${backupPath}`);
+const backupOut = await handleBacklogCommand(sid, `backup ${backupPath}`);
 assert(/Backlog backup written/.test(backupOut), `backup command writes backup, got: ${backupOut}`);
-const restoreOut = handleBacklogCommand(sid, `restore ${backupPath}`);
+const restoreOut = await handleBacklogCommand(sid, `restore ${backupPath}`);
 assert(/Backlog backup restored/.test(restoreOut), `restore command restores backup, got: ${restoreOut}`);
 
-const unknownOut = handleBacklogCommand(sid, "frobnicate");
+const unknownOut = await handleBacklogCommand(sid, "frobnicate");
 assert(/Unknown command/.test(unknownOut), "unknown command returns error message");
-assert(/item delete smoke: ok/.test(handleBacklogCommand(sid, "doctor")), "doctor command runs smoke check");
+assert(/item delete smoke: ok/.test(await handleBacklogCommand(sid, "doctor")), "doctor command runs smoke check");
 
 done("test-command-parsing");

@@ -37,7 +37,7 @@ try {
         if (existing === content) {
             await runSourceSmoke(sourceExtension);
             console.log(`backlog extension shim is already installed at ${targetExtension}`);
-            console.log("Friction delete smoke check passed.");
+            console.log("Item delete smoke check passed.");
             process.exit(0);
         }
         if (!existing.includes(extensionName)) {
@@ -50,7 +50,7 @@ try {
     await runSourceSmoke(sourceExtension);
     console.log(`Installed backlog extension shim at ${targetExtension}`);
     console.log(`Shim imports ${pathToFileURL(sourceExtension).href}`);
-    console.log("Friction delete smoke check passed.");
+    console.log("Item delete smoke check passed.");
 } catch (error) {
     console.error(`install-extension-shim: ${error.message}`);
     process.exitCode = 1;

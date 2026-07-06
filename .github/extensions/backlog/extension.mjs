@@ -43,6 +43,7 @@ import {
   makeSessionEndBanner,
 } from "./prompt.mjs";
 import { handleBacklogCommand } from "./commands.mjs";
+import { createLoopRuntime } from "./loop-runtime.mjs";
 import {
   assertDeprivilegedJoinConfig,
   createBacklogJoinConfig,
@@ -54,6 +55,7 @@ import {
 initBacklog();
 
 let activeSessionId = null;
+let loopRuntime = null;
 
 function setActiveSession(id) {
   if (!id) return null;
@@ -84,11 +86,19 @@ const joinConfig = createBacklogJoinConfig({
   addItem,
   markDone,
   removeItem,
-  handleBacklogCommand,
+  handleBacklogCommand: (sid, rawText) => handleBacklogCommand(sid, rawText, { loopRuntime }),
 });
 assertDeprivilegedJoinConfig(joinConfig);
 
 const session = await joinSession(joinConfig);
+loopRuntime = createLoopRuntime({
+  session,
+  getSessionId: () => activeSessionId,
+  repoRoot: process.cwd(),
+  worktreePath: process.cwd(),
+  log: (message, options) => session.log(message, options),
+  notify: (message) => session.log(message, { level: "warn" }),
+});
 
 // session is now available — wire it into sidecar so /api/engage can call session.send.
 setSessionRef(session);
@@ -152,17 +162,19 @@ session.on("session.title_changed", (ev) => {
 // burndown auto-advance fires the next item only when the agent is truly
 // idle. session.idle fires after every turn the agent finishes (including
 // turns we kicked off via session.send for a burndown auto-advance).
-session.on("assistant.message", (event) => {
+session.on("assistant.message", async (event) => {
   if (event.agentId) return;
   const sid = activeSessionId;
   if (!sid) return;
   setSessionState(sid, "busy");
+  await loopRuntime?.onAssistantMessage(event);
 });
 
-session.on("session.idle", () => {
+session.on("session.idle", async () => {
   const sid = activeSessionId;
   if (!sid) return;
   setSessionState(sid, "idle");
+  await loopRuntime?.onIdle();
 });
 
 session.on?.("session.end", () => {

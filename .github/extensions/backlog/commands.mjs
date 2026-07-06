@@ -8,6 +8,7 @@ import {
   addItem,
   markDone,
   removeItem,
+  editItem,
   moveTop,
   moveUp,
   moveDown,
@@ -43,7 +44,7 @@ export function parseBacklogCommand(rawText) {
   return { cmd, args, isTop };
 }
 
-export function handleBacklogCommand(sessionId, rawText) {
+export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = null } = {}) {
   const { cmd, args, isTop } = parseBacklogCommand(rawText);
 
   switch (cmd) {
@@ -70,6 +71,14 @@ export function handleBacklogCommand(sessionId, rawText) {
       const item = removeItem(sessionId, args[0]);
       if (!item) return `Error: Item '${args[0]}' not found`;
       return `Removed '${item.description}'`;
+    }
+    case "edit": {
+      const ref = args[0];
+      const desc = args.slice(1).join(" ").trim();
+      if (!ref || !desc) return "Error: Usage: /backlog edit <id-or-position> <new-description>";
+      const item = editItem(sessionId, ref, desc);
+      if (!item) return `Error: Item '${ref}' not found`;
+      return `Updated '${item.description}'`;
     }
     case "top": {
       const item = moveTop(sessionId, args[0]);
@@ -158,10 +167,42 @@ export function handleBacklogCommand(sessionId, rawText) {
         return `Error: ${e.message}`;
       }
     }
+    case "loop": {
+      if (!loopRuntime) return "Error: Backlog loop runtime is not available";
+      const sub = (args[0] || "status").toLowerCase();
+      const featureId = args[1];
+      try {
+        if (sub === "start") {
+          if (!featureId) return "Error: Feature id required. Usage: /backlog loop start <feature-id>";
+          const out = await loopRuntime.start(featureId);
+          if (out.reason === "loop_already_active") {
+            return "Error: Another backlog loop is already active in this session";
+          }
+          return out.started
+            ? `Backlog loop started for feature '${featureId}'`
+            : `Backlog loop already running for feature '${featureId}'`;
+        }
+        if (sub === "stop") {
+          if (!featureId) return "Error: Feature id required. Usage: /backlog loop stop <feature-id>";
+          const out = await loopRuntime.stop(featureId);
+          return out.stopped
+            ? `Backlog loop stopped for feature '${featureId}'`
+            : `Backlog loop is not running for feature '${featureId}'`;
+        }
+        if (sub === "status") {
+          const running = loopRuntime.list();
+          if (running.length === 0) return "No backlog loops are running";
+          return running.map((loop) => `  ${loop.featureId}`).join("\n");
+        }
+      } catch (e) {
+        return `Error: ${e.message}`;
+      }
+      return "Error: Usage: /backlog loop start|stop|status [feature-id]";
+    }
     case "doctor": {
       return formatDoctorReport();
     }
     default:
-      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, approve, review, backup, restore, doctor`;
+      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, edit, top, up, down, next, pending, sessions, prune, clear, show, approve, review, backup, restore, loop, doctor`;
   }
 }

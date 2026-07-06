@@ -604,6 +604,18 @@ export function setSetting(key, value) {
   ).run(key, String(value));
 }
 
+export function deleteItemDependentsByIds(itemIds) {
+  if (!itemIds.length) return;
+  const placeholders = itemIds.map(() => "?").join(", ");
+  db.prepare(`DELETE FROM item_gates WHERE item_id IN (${placeholders})`).run(...itemIds);
+  db.prepare(`DELETE FROM item_waivers WHERE item_id IN (${placeholders})`).run(...itemIds);
+}
+
+export function deleteItemDependentsForSession(sessionId) {
+  const itemIds = db.prepare("SELECT id FROM items WHERE session_id = ?").all(sessionId).map((row) => row.id);
+  deleteItemDependentsByIds(itemIds);
+}
+
 export function listSessions() {
   return db.prepare(`
     SELECT s.id, s.last_accessed,
@@ -613,12 +625,15 @@ export function listSessions() {
 }
 
 export function pruneSessions(days = 7) {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - days);
-  const stale = db.prepare("SELECT id FROM sessions WHERE last_accessed < ?").all(cutoff.toISOString());
-  for (const s of stale) {
-    db.prepare("DELETE FROM items WHERE session_id = ?").run(s.id);
-    db.prepare("DELETE FROM sessions WHERE id = ?").run(s.id);
-  }
-  return stale.length;
+  return tx(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const stale = db.prepare("SELECT id FROM sessions WHERE last_accessed < ?").all(cutoff.toISOString());
+    for (const s of stale) {
+      deleteItemDependentsForSession(s.id);
+      db.prepare("DELETE FROM items WHERE session_id = ?").run(s.id);
+      db.prepare("DELETE FROM sessions WHERE id = ?").run(s.id);
+    }
+    return stale.length;
+  });
 }

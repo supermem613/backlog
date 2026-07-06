@@ -1,6 +1,12 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
 import {
+  db,
+  pruneSessions,
+  setItemGate,
+  setItemWaiver,
+} from "../db.mjs";
+import {
   addItem,
   markDone,
   removeItem,
@@ -61,10 +67,26 @@ const missing = resolveItemRef("does-not-exist", sid);
 assert(!missing, "resolveItemRef returns falsy for missing id");
 
 const clearSid = "test-clear-session";
-addItem(clearSid, "clear one");
-addItem(clearSid, "clear two");
+const clearOne = addItem(clearSid, "clear one");
+const clearTwo = addItem(clearSid, "clear two");
+setItemGate({ itemId: clearOne.id, gateKind: "start", state: "approved", actor: "test" });
+setItemWaiver({ itemId: clearTwo.id, gateKind: "review", mode: "sticky", actor: "test" });
 const cleared = clearSessionItems(clearSid);
 assertEqual(cleared.changes, 2, "clear removes all session items");
 assertEqual(getPendingCount(clearSid), 0, "clear leaves no pending items");
+
+const gated = addItem(sid, "gated remove");
+setItemGate({ itemId: gated.id, gateKind: "start", state: "approved", actor: "test" });
+setItemWaiver({ itemId: gated.id, gateKind: "review", mode: "sticky", actor: "test" });
+assertEqual(removeItem(sid, gated.id).description, "gated remove", "remove deletes gated item");
+assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_gates WHERE item_id = ?").get(gated.id).count, 0, "remove deletes item gates");
+assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_waivers WHERE item_id = ?").get(gated.id).count, 0, "remove deletes item waivers");
+
+const pruneSid = "test-prune-session";
+const pruneItem = addItem(pruneSid, "gated prune");
+setItemGate({ itemId: pruneItem.id, gateKind: "start", state: "approved", actor: "test" });
+db.prepare("UPDATE sessions SET last_accessed = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", pruneSid);
+assertEqual(pruneSessions(7), 1, "prune removes stale gated session");
+assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_gates WHERE item_id = ?").get(pruneItem.id).count, 0, "prune deletes item gates");
 
 done("test-items");
