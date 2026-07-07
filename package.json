@@ -1,7 +1,7 @@
 {
   "name": "copilot-cli-backlog",
   "version": "1.0.3",
-  "description": "Copilot CLI extension for managing a per-session task backlog with a live sidecar viewer.",
+  "description": "Copilot CLI extension for managing a per-session item backlog with a live sidecar viewer.",
   "type": "module",
   "private": false,
   "license": "MIT",

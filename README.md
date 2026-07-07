@@ -1,6 +1,6 @@
 # copilot-cli-backlog
 
-A GitHub Copilot CLI extension that gives every session a **persistent task backlog** with deterministic slash commands, in-conversation tools the agent can call, and a chromeless sidecar viewer for one-click control.
+A GitHub Copilot CLI extension that gives every session a **persistent item backlog** with deterministic slash commands, in-conversation tools the agent can call, and a chromeless sidecar viewer for one-click control.
 
 The agent and the human share the same backlog: you can `/backlog add` something while the agent is working, the agent can call `backlog_next` after completing a step to pick up the next item, and the sidecar window shows a live, click-to-engage list across all your active Copilot CLI sessions.
 
@@ -97,9 +97,9 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 /backlog review <id> approve|reject # accept or reject an autonomous item output
 /backlog backup [path]              # export a checksum-protected JSON backup
 /backlog restore <path>             # verify checksum and restore a JSON backup
-/backlog loop status                # list active autonomous feature loops
-/backlog loop start <feature-id>    # start an approved feature loop
-/backlog loop stop <feature-id>     # stop an active feature loop
+/backlog loop status                # list active autonomous queue loops
+/backlog loop start <queue-id>      # start an approved queue loop
+/backlog loop stop <queue-id>       # stop an active queue loop
 /backlog doctor                     # show runtime provenance and run delete smoke check
 ```
 
@@ -123,7 +123,7 @@ Backlog avoids elevated extension capabilities: it does not skip tool permission
 
 ### Sidecar viewer
 
-`/backlog show` (or any session activity once the sidecar is running) opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer groups work by area and feature, keeps unassigned session items under Inbox, lets you click any item to ask the owning agent session to engage on it, and exposes toolbar controls for burndown mode and viewer refresh.
+`/backlog show` (or any session activity once the sidecar is running) opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer groups work by queue, keeps unassigned session items under Inbox, lets you click any item to ask the owning agent session to engage on it, and exposes toolbar controls for burndown mode and viewer refresh.
 
 The top bar shows the loaded package version, git commit, and storage status. Hover it to see the exact extension and package paths.
 
