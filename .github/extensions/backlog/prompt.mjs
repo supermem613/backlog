@@ -3,7 +3,7 @@
 // one place rather than scattered across the extension.
 
 export function makeEngagePrompt(item) {
-  return `Please engage on backlog item [${item.id}]: ${item.description}. ` +
+  return `Please engage on queue item [${item.id}]: ${item.description}. ` +
     `Work on this now and call backlog_done when finished.`;
 }
 

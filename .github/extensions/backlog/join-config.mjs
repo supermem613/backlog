@@ -55,7 +55,7 @@ export function createBacklogJoinConfig({
     commands: [
       {
         name: "backlog",
-        description: "Manage session task backlog: add, list, done, remove, edit, top, up, down, next, pending, sessions, prune, clear, show, approve, review, backup, restore, loop, doctor",
+        description: "Manage session task backlog and queues: add, list, done, remove, edit, top, up, down, next, pending, sessions, prune, clear, queue, show, approve, review, backup, restore, loop, doctor",
         handler: async (context) => {
           const sid = getActiveSessionId() || "default";
           const rawText = context.args || "list";

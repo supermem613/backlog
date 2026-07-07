@@ -57,8 +57,10 @@ export function formatDoctorReport(smoke = runItemDeleteSmoke()) {
     `Backlog ${runtime.version} (${runtime.commit})`,
     `Extension: ${runtime.extensionPath}`,
     `Package: ${runtime.packagePath}`,
+    `queue/item storage: queue_id + queue snapshots`,
     `legacy storage: ${runtime.legacyStoragePresent ? "present" : "removed"}`,
     `item delete smoke: ${smoke.ok ? "ok" : "failed"}`,
+    `queue item delete smoke: ${smoke.ok ? "ok" : "failed"}`,
   ];
   return lines.join("\n");
 }

@@ -21,7 +21,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as net_module from "node:net";
 
-import { db, BACKLOG_DIR, setSessionLabel, getSessionLabel } from "./db.mjs";
+import { db, BACKLOG_DIR, setSessionLabel, getSessionLabel, getItemPorContext } from "./db.mjs";
 import {
   addItem,
   moveTop,
@@ -129,45 +129,61 @@ export function setSessionRef(ref)     { sidecarState.sessionRef = ref; }
 
 export function getCurrentItems(sessionId) {
   return db.prepare(`
-    SELECT id, description, position, feature_id, priority, status, created_at
+    SELECT id, description, position, queue_id, feature_id, priority, status, created_at
     FROM items
-    WHERE session_id = ? AND status = ?
+    WHERE session_id = ? AND status = ? AND (queue_id = ? OR queue_id IS NULL)
     ORDER BY position
-  `).all(sessionId, "pending");
+  `).all(sessionId, "pending", "inbox");
 }
 
-function buildAreaSnapshot(sessions) {
+function summarizePorContext(context) {
+  if (!context) return null;
+  const parts = [];
+  if (context.por_id) parts.push(`por:${context.por_id}`);
+  if (context.kind && context.kind !== "por") parts.push(context.kind);
+  const metadata = context.metadata && typeof context.metadata === "object" ? context.metadata : {};
+  const metadataKeys = Object.keys(metadata).filter((key) => metadata[key] !== undefined && metadata[key] !== null && metadata[key] !== "");
+  if (metadataKeys.length > 0) {
+    const sample = metadataKeys.slice(0, 2).map((key) => `${key}:${String(metadata[key]).slice(0, 24)}`).join(", ");
+    parts.push(sample);
+  }
+  return parts.length > 0 ? parts.join(" • ") : null;
+}
+
+function buildQueueSnapshot(sessions) {
+  const queueRows = db.prepare("SELECT id, name, description, metadata_json FROM queues ORDER BY name, created_at").all();
   const rows = db.prepare(`
     SELECT
+      i.rowid AS item_rowid,
       i.id,
       i.session_id,
       i.description,
       i.position,
-      i.feature_id,
       i.priority,
       i.status,
       i.created_at,
-      f.title AS feature_title,
-      f.status AS feature_status,
-      a.id AS area_id,
-      a.name AS area_name
+      i.queue_id,
+      q.rowid AS queue_rowid,
+      q.name AS queue_name,
+      q.description AS queue_description,
+      q.metadata_json AS queue_metadata_json
     FROM items i
-    LEFT JOIN features f ON f.id = i.feature_id
-    LEFT JOIN areas a ON a.id = f.area_id
+    LEFT JOIN queues q ON q.id = i.queue_id
     WHERE i.status = ?
-    ORDER BY COALESCE(a.name, 'Inbox'), COALESCE(f.priority, 0) DESC, COALESCE(f.title, 'Inbox'), i.priority DESC, i.position
+    ORDER BY COALESCE(q.name, 'Inbox'), i.position
   `).all("pending");
   const sessionsById = new Map(sessions.map((session) => [session.id, session]));
-  const areas = new Map();
+  const queues = new Map();
 
-  function ensureArea(id, name) {
-    if (!areas.has(id)) areas.set(id, { id, name, features: new Map(), itemCount: 0 });
-    return areas.get(id);
+  function ensureQueue(id, name, description, metadata) {
+    if (!queues.has(id)) {
+      queues.set(id, { id, name: name || "Inbox", description: description || null, metadata: metadata || {}, items: [], itemCount: 0 });
+    }
+    return queues.get(id);
   }
 
-  function ensureFeature(area, id, title, status) {
-    if (!area.features.has(id)) area.features.set(id, { id, title, status, items: [] });
-    return area.features.get(id);
+  for (const row of queueRows) {
+    ensureQueue(row.id, row.name || "Inbox", row.description, row.metadata_json ? JSON.parse(row.metadata_json) : {});
   }
 
   for (const row of rows) {
@@ -177,11 +193,12 @@ function buildAreaSnapshot(sessions) {
       live: false,
       state: "offline",
     };
-    const areaId = row.area_id || "inbox";
-    const area = ensureArea(areaId, row.area_name || "Inbox");
-    const featureId = row.feature_id || "inbox";
-    const feature = ensureFeature(area, featureId, row.feature_title || "Inbox", row.feature_status || "pending");
-    feature.items.push({
+    const queueId = row.queue_id;
+    if (!queueId) continue;
+    if (typeof row.queue_rowid === "number" && typeof row.item_rowid === "number" && row.queue_rowid >= row.item_rowid) continue;
+    const queue = ensureQueue(queueId, row.queue_name || (queueId === "inbox" ? "Inbox" : queueId), row.queue_description, row.queue_metadata_json ? JSON.parse(row.queue_metadata_json) : {});
+    const porContext = getItemPorContext(row.id);
+    queue.items.push({
       id: row.id,
       session_id: row.session_id,
       session_label: session.label,
@@ -189,17 +206,28 @@ function buildAreaSnapshot(sessions) {
       session_state: session.state,
       description: row.description,
       position: row.position,
-      feature_id: row.feature_id,
+      queue_id: queueId,
       priority: row.priority,
       status: row.status,
       created_at: row.created_at,
+      por_context: porContext ? { porId: porContext.por_id, kind: porContext.kind, metadata: porContext.metadata } : null,
+      por_context_summary: summarizePorContext(porContext),
     });
-    area.itemCount += 1;
+    queue.itemCount += 1;
   }
 
-  return [...areas.values()].map((area) => ({
-    ...area,
-    features: [...area.features.values()],
+  for (const queue of queues.values()) {
+    queue.items.sort((a, b) => {
+      if (b.position !== a.position) return b.position - a.position;
+      const left = a.created_at || "";
+      const right = b.created_at || "";
+      return right.localeCompare(left);
+    });
+  }
+
+  return [...queues.values()].map((queue) => ({
+    ...queue,
+    items: queue.items,
   }));
 }
 
@@ -303,10 +331,10 @@ export function buildSnapshot(activeSessionIdHint) {
   return {
     type: "snapshot",
     activeSessionId: activeSessionIdHint || sessions.find(s => s.live)?.id || sessions[0]?.id || null,
-    activeAreaId: null,
+    activeQueueId: null,
     runtime: getRuntimeInfo(),
     decisions: listHumanDecisions(),
-    areas: buildAreaSnapshot(sessions),
+    queues: buildQueueSnapshot(sessions),
     sessions,
   };
 }
@@ -643,12 +671,13 @@ export async function handleHttp(req, res) {
     const sid = body.sessionId;
     if (!sid) { res.writeHead(400); res.end("missing sessionId"); return; }
     let result = null;
+    const queueId = body.queueId || null;
     switch (body.op) {
-      case "add":    result = addItem(sid, body.description || "", false, body.featureId || null); break;
-      case "up":     result = moveUp(sid, body.id); break;
-      case "down":   result = moveDown(sid, body.id); break;
-      case "edit":   result = editItem(sid, body.id, body.description); break;
-      case "delete": result = removeItem(sid, body.id); break;
+      case "add":    result = addItem(sid, body.description || "", false, body.featureId || null, queueId); break;
+      case "up":     result = moveUp(sid, body.id, queueId); break;
+      case "down":   result = moveDown(sid, body.id, queueId); break;
+      case "edit":   result = editItem(sid, body.id, body.description, queueId); break;
+      case "delete": result = removeItem(sid, body.id, queueId); break;
       default: res.writeHead(400); res.end("bad op"); return;
     }
     if (!result) { res.writeHead(400); res.end("invalid request"); return; }
