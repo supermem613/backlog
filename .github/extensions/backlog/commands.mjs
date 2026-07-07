@@ -53,7 +53,7 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
     case "add": {
       const desc = args.join(" ").trim();
       if (!desc) return "Error: Description required. Usage: /backlog add <description>";
-      const { id, position } = addItem(sessionId, desc, isTop, null, DEFAULT_QUEUE_ID);
+      const { id, position } = addItem(sessionId, desc, isTop, DEFAULT_QUEUE_ID);
       return `Added: '${desc}' [id: ${id}] (position ${position})`;
     }
     case "list": {
@@ -226,7 +226,7 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
         if (sub === "status") {
           const running = loopRuntime.list();
           if (running.length === 0) return "No backlog loops are running";
-          return running.map((loop) => `  ${loop.queueId || loop.queueName || loop.featureId || loop.id}`).join("\n");
+          return running.map((loop) => `  ${loop.queueId || loop.queueName || loop.id}`).join("\n");
         }
       } catch (e) {
         return `Error: ${e.message}`;

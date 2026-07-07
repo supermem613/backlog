@@ -55,7 +55,7 @@ export function createBacklogJoinConfig({
     commands: [
       {
         name: "backlog",
-        description: "Manage session task backlog and queues: add, list, done, remove, edit, top, up, down, next, pending, sessions, prune, clear, queue, show, approve, review, backup, restore, loop, doctor",
+        description: "Manage session item backlog and queues: add, list, done, remove, edit, top, up, down, next, pending, sessions, prune, clear, queue, show, approve, review, backup, restore, loop, doctor",
         handler: async (context) => {
           const sid = getActiveSessionId() || "default";
           const rawText = context.args || "list";
@@ -68,7 +68,7 @@ export function createBacklogJoinConfig({
     tools: [
       {
         name: "backlog_next",
-        description: "Get the next pending backlog item. Call this after completing a task to check for more work.",
+        description: "Get the next pending backlog item. Call this after completing an item to check for more work.",
         parameters: { type: "object", properties: {} },
         handler: async (_args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";

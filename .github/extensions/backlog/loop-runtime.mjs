@@ -16,10 +16,8 @@ export function extractAssistantContent(event) {
 
 function resolveRuntimeTarget(store, targetId) {
   const queue = store.getQueue(targetId);
-  if (queue) return { key: queue.id, featureId: targetId, queueId: queue.id };
-  const feature = store.getFeature(targetId);
-  if (feature) return { key: feature.id, featureId: feature.id, queueId: null };
-  return { key: targetId, featureId: targetId, queueId: null };
+  if (queue) return { key: queue.id, queueId: queue.id };
+  return { key: targetId, queueId: targetId };
 }
 
 export function createLoopRuntime({
@@ -38,12 +36,10 @@ export function createLoopRuntime({
     const resolved = resolveRuntimeTarget(store, targetId);
     return {
       key: resolved.key,
-      featureId: resolved.featureId,
       queueId: resolved.queueId,
       controller: createLoopController({
         session,
         store,
-        featureId: resolved.featureId,
         queueId: resolved.queueId,
         sessionId,
         repoRoot,
@@ -56,28 +52,28 @@ export function createLoopRuntime({
 
   return {
     async start(targetId) {
-      if (!targetId) throw new Error("feature id required");
+      if (!targetId) throw new Error("queue id required");
       const resolved = resolveRuntimeTarget(store, targetId);
-      if (controllers.has(resolved.key)) return { started: false, featureId: resolved.featureId, reason: "already_running" };
-      if (controllers.size > 0) return { started: false, featureId: resolved.featureId, reason: "loop_already_active" };
+      if (controllers.has(resolved.key)) return { started: false, queueId: resolved.queueId, reason: "already_running" };
+      if (controllers.size > 0) return { started: false, queueId: resolved.queueId, reason: "loop_already_active" };
       const loop = makeController(targetId);
       await loop.controller.start();
       controllers.set(loop.key, loop);
-      return { started: true, featureId: loop.featureId };
+      return { started: true, queueId: loop.queueId };
     },
 
     async stop(targetId) {
-      if (!targetId) throw new Error("feature id required");
+      if (!targetId) throw new Error("queue id required");
       const resolved = resolveRuntimeTarget(store, targetId);
       const loop = controllers.get(resolved.key);
-      if (!loop) return { stopped: false, featureId: resolved.featureId, reason: "not_running" };
+      if (!loop) return { stopped: false, queueId: resolved.queueId, reason: "not_running" };
       await loop.controller.stop();
       controllers.delete(resolved.key);
-      return { stopped: true, featureId: loop.featureId };
+      return { stopped: true, queueId: loop.queueId };
     },
 
     list() {
-      return [...controllers.values()].map(({ featureId, queueId }) => ({ featureId, queueId }));
+      return [...controllers.values()].map(({ queueId }) => ({ queueId }));
     },
 
     activeCount() {
@@ -87,7 +83,7 @@ export function createLoopRuntime({
     async onIdle() {
       const results = [];
       for (const [, loop] of controllers) {
-        results.push({ featureId: loop.featureId, ...(await loop.controller.onIdle()) });
+        results.push({ queueId: loop.queueId, ...(await loop.controller.onIdle()) });
       }
       return results;
     },
@@ -97,7 +93,7 @@ export function createLoopRuntime({
       if (!content) return [];
       const results = [];
       for (const [, loop] of controllers) {
-        results.push({ featureId: loop.featureId, ...(await loop.controller.onAssistantMessage(content)) });
+        results.push({ queueId: loop.queueId, ...(await loop.controller.onAssistantMessage(content)) });
       }
       return results;
     },

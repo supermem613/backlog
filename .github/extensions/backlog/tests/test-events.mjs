@@ -5,25 +5,23 @@ import {
   appendEvent,
   db,
   rebuildProjectionsFromEvents,
-  setFeatureGate,
   setItemGate,
+  setItemLease,
   setItemWaiver,
-  setLease,
-  setLoopState,
+  setQueueLoopState,
   tableExists,
   writeWithEvent,
 } from "../db.mjs";
 import { addItem } from "../items.mjs";
 
-db.prepare("INSERT INTO areas (id, name) VALUES (?, ?)").run("area-1", "Inbox");
-db.prepare("INSERT INTO features (id, area_id, title) VALUES (?, ?, ?)").run("feature-1", "area-1", "Feature one");
-const item = addItem("events-session", "event-backed item");
-db.prepare("UPDATE items SET feature_id = ?, priority = ? WHERE id = ?").run("feature-1", 10, item.id);
+const queueId = "events-queue";
+const item = addItem("events-session", "event-backed item", false, queueId);
+db.prepare("UPDATE items SET priority = ? WHERE id = ?").run(10, item.id);
 
 const eventId = appendEvent({
   actor: "test",
-  scopeKind: "feature",
-  scopeId: "feature-1",
+  scopeKind: "queue",
+  scopeId: queueId,
   kind: "note",
   payload: { ok: true },
   correlationId: "corr-1",
@@ -63,10 +61,9 @@ assertEqual(db.prepare("SELECT value FROM settings WHERE key = ?").get("atomic-o
 assertEqual(db.prepare("SELECT COUNT(*) AS count FROM events WHERE scope_id = ?").get("atomic-ok").count, 1, "successful mutation writes event");
 
 setItemGate({ itemId: item.id, gateKind: "start", state: "approved", binding: { base: "abc" }, actor: "test" });
-setFeatureGate({ featureId: "feature-1", gateKind: "review", state: "pending", binding: { tree: "def" }, actor: "test" });
-setLoopState({ featureId: "feature-1", status: "running", continuationsFired: 2, inFlight: true, actor: "test" });
-setLease({
-  featureId: "feature-1",
+setQueueLoopState({ queueId, status: "running", continuationsFired: 2, inFlight: true, actor: "test" });
+setItemLease({
+  itemId: item.id,
   leaseId: "lease-1",
   ownerSession: "events-session",
   repoRoot: "C:\\repo",
@@ -81,9 +78,8 @@ setItemWaiver({ itemId: item.id, gateKind: "start", mode: "count", remainingUses
 function projectionDigest() {
   const payload = {
     itemGates: db.prepare("SELECT item_id, gate_kind, state, binding_json FROM item_gates ORDER BY item_id, gate_kind").all(),
-    featureGates: db.prepare("SELECT feature_id, gate_kind, state, binding_json FROM feature_gates ORDER BY feature_id, gate_kind").all(),
-    loopState: db.prepare("SELECT feature_id, status, continuations_fired, in_flight FROM loop_state ORDER BY feature_id").all(),
-    leases: db.prepare("SELECT feature_id, lease_id, owner_session, run_epoch, needs_recovery FROM leases ORDER BY feature_id").all(),
+    queueLoopState: db.prepare("SELECT queue_id, status, continuations_fired, in_flight FROM queue_loop_state ORDER BY queue_id").all(),
+    itemLeases: db.prepare("SELECT item_id, lease_id, owner_session, needs_recovery FROM item_leases ORDER BY item_id").all(),
     waivers: db.prepare("SELECT item_id, gate_kind, mode, remaining_uses FROM item_waivers ORDER BY item_id, gate_kind").all(),
   };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -92,24 +88,15 @@ function projectionDigest() {
 const before = projectionDigest();
 const replayed = rebuildProjectionsFromEvents();
 const after = projectionDigest();
-assert(replayed >= 7, "replay processed event log");
+assert(replayed >= 6, "replay processed event log");
 assertEqual(after, before, "rebuilt projections match incremental projections");
 
-assertEqual(db.prepare("SELECT COUNT(*) AS count FROM gates").get().count, 2, "gates union view returns item and feature gates");
+assertEqual(db.prepare("SELECT COUNT(*) AS count FROM gates").get().count, 1, "gates view returns item gates");
 assertEqual(db.prepare("SELECT COUNT(*) AS count FROM waivers").get().count, 1, "waivers union view returns item waiver");
-assert(tableExists("feature_pors"), "feature_pors table exists");
-assert(tableExists("feature_prs"), "feature_prs table exists");
-assert(tableExists("feature_sidequests"), "feature_sidequests table exists");
-assert(tableExists("feature_isolation_units"), "feature_isolation_units table exists");
-assert(db.prepare("PRAGMA index_list(items)").all().some((row) => row.name === "idx_items_feature_status_priority"), "items feature/status/priority index exists");
-assert(db.prepare("PRAGMA foreign_key_list(features)").all().some((row) => row.table === "areas" && row.on_delete === "RESTRICT"), "features area FK is RESTRICT");
-
-let restrictFailed = false;
-try {
-  db.prepare("DELETE FROM areas WHERE id = ?").run("area-1");
-} catch {
-  restrictFailed = true;
-}
-assert(restrictFailed, "area delete is restricted while a feature references it");
+assert(tableExists("item_pors"), "item_pors table exists");
+assert(tableExists("item_attachments"), "item_attachments table exists");
+assert(tableExists("item_isolation_units"), "item_isolation_units table exists");
+assert(tableExists("item_leases"), "item_leases table exists");
+assert(db.prepare("PRAGMA index_list(items)").all().some((row) => row.name === "idx_items_queue_status_position"), "items queue/status/position index exists");
 
 done("test-events");

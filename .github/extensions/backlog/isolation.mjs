@@ -8,10 +8,10 @@ export function resolveIsolation({
   provider,
   globalPreference = ISOLATION.AUTO,
   repoPreference = null,
-  featurePreference = null,
+  queuePreference = null,
   capabilities = {},
 }) {
-  const preference = featurePreference || repoPreference || globalPreference || ISOLATION.AUTO;
+  const preference = queuePreference || repoPreference || globalPreference || ISOLATION.AUTO;
   const canSidequest = !!capabilities.sidequest;
   if (preference === ISOLATION.IN_PLACE) {
     return { mode: ISOLATION.IN_PLACE, requiresApproval: false, reason: "preferred_in_place" };

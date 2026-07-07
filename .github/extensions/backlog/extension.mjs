@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Copilot CLI Extension: Backlog
- * A per-session task queue with deterministic slash commands, tools, and sidecar control.
+ * A per-session item queue with deterministic slash commands, tools, and sidecar control.
  * Storage: ~/.backlog/backlog.db (node:sqlite — zero deps, bundled with Node 24)
  *
  * Module layout:

@@ -60,15 +60,13 @@ export function initBacklog(dirOverride) {
       session_id TEXT NOT NULL,
       description TEXT NOT NULL,
       position INTEGER NOT NULL,
-      feature_id TEXT,
       priority INTEGER DEFAULT 0,
       queue_id TEXT,
       por_json TEXT,
       status TEXT DEFAULT 'pending',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (session_id) REFERENCES sessions(id),
-      FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT
+      FOREIGN KEY (session_id) REFERENCES sessions(id)
     );
     CREATE INDEX IF NOT EXISTS idx_session ON items(session_id);
     CREATE INDEX IF NOT EXISTS idx_position ON items(session_id, position);
@@ -84,11 +82,10 @@ export function initBacklog(dirOverride) {
   try { db.exec("ALTER TABLE sessions ADD COLUMN label TEXT;"); }
   catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
   migrateRemoveFrictionStorage();
-  addColumnIfMissing("items", "feature_id", "TEXT");
   addColumnIfMissing("items", "priority", "INTEGER DEFAULT 0");
   addColumnIfMissing("items", "queue_id", "TEXT");
   addColumnIfMissing("items", "por_json", "TEXT");
-  ensureSubstrateSchema();
+  ensureEventSchema();
   ensureQueueSchema();
   // Note: a legacy `pinned` column may exist on older installs. We never read
   // or write it — pinning was removed; the viewer is dismissed by closing the
@@ -191,68 +188,8 @@ function bumpUserVersionAtLeast(version) {
   if (current < version) db.exec(`PRAGMA user_version = ${version};`);
 }
 
-function ensureSubstrateSchema() {
+function ensureEventSchema() {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS areas (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS features (
-      id TEXT PRIMARY KEY,
-      area_id TEXT NOT NULL,
-      parent_feature_id TEXT,
-      title TEXT NOT NULL,
-      por_id TEXT,
-      status TEXT NOT NULL DEFAULT 'proposed',
-      priority INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (area_id) REFERENCES areas(id) ON DELETE RESTRICT,
-      FOREIGN KEY (parent_feature_id) REFERENCES features(id) ON DELETE RESTRICT
-    );
-    CREATE TABLE IF NOT EXISTS feature_pors (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      feature_id TEXT NOT NULL,
-      por_id TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE (feature_id, por_id),
-      FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT
-    );
-    CREATE TABLE IF NOT EXISTS feature_prs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      feature_id TEXT NOT NULL,
-      pr_url TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE (feature_id, pr_url),
-      FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT
-    );
-    CREATE TABLE IF NOT EXISTS feature_sidequests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      feature_id TEXT NOT NULL,
-      sidequest_name TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE (feature_id, sidequest_name),
-      FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT
-    );
-    CREATE TABLE IF NOT EXISTS feature_attachments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      feature_id TEXT NOT NULL,
-      kind TEXT NOT NULL CHECK (kind IN ('path', 'note')),
-      ref TEXT NOT NULL,
-      meta_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT
-    );
-    CREATE TABLE IF NOT EXISTS feature_isolation_units (
-      feature_id TEXT PRIMARY KEY,
-      repo_root TEXT NOT NULL,
-      path TEXT NOT NULL,
-      provider TEXT NOT NULL CHECK (provider IN ('soda', 'git')),
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT
-    );
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -273,15 +210,6 @@ function ensureSubstrateSchema() {
       PRIMARY KEY (item_id, gate_kind),
       FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE RESTRICT
     );
-    CREATE TABLE IF NOT EXISTS feature_gates (
-      feature_id TEXT NOT NULL,
-      gate_kind TEXT NOT NULL CHECK (gate_kind IN ('start', 'review')),
-      state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'waived', 'rejected')),
-      binding_json TEXT NOT NULL DEFAULT '{}',
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (feature_id, gate_kind),
-      FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT
-    );
     CREATE TABLE IF NOT EXISTS item_waivers (
       item_id TEXT NOT NULL,
       gate_kind TEXT NOT NULL CHECK (gate_kind IN ('start', 'review', 'both')),
@@ -292,63 +220,13 @@ function ensureSubstrateSchema() {
       PRIMARY KEY (item_id, gate_kind),
       FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE RESTRICT
     );
-    CREATE TABLE IF NOT EXISTS feature_waivers (
-      feature_id TEXT NOT NULL,
-      gate_kind TEXT NOT NULL CHECK (gate_kind IN ('start', 'review', 'both')),
-      mode TEXT NOT NULL CHECK (mode IN ('sticky', 'time', 'count')),
-      expires_at TEXT,
-      remaining_uses INTEGER,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (feature_id, gate_kind),
-      FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT
-    );
-    CREATE TABLE IF NOT EXISTS area_waivers (
-      area_id TEXT NOT NULL,
-      gate_kind TEXT NOT NULL CHECK (gate_kind IN ('start', 'review', 'both')),
-      mode TEXT NOT NULL CHECK (mode IN ('sticky', 'time', 'count')),
-      expires_at TEXT,
-      remaining_uses INTEGER,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (area_id, gate_kind),
-      FOREIGN KEY (area_id) REFERENCES areas(id) ON DELETE RESTRICT
-    );
-    CREATE TABLE IF NOT EXISTS leases (
-      feature_id TEXT PRIMARY KEY,
-      lease_id TEXT NOT NULL,
-      owner_session TEXT NOT NULL,
-      repo_root TEXT NOT NULL,
-      worktree_path TEXT,
-      heartbeat_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      run_epoch INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'active',
-      needs_recovery INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT
-    );
-    CREATE TABLE IF NOT EXISTS loop_state (
-      feature_id TEXT PRIMARY KEY,
-      status TEXT NOT NULL,
-      continuations_fired INTEGER NOT NULL DEFAULT 0,
-      in_flight INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (feature_id) REFERENCES features(id) ON DELETE RESTRICT
-    );
-    CREATE INDEX IF NOT EXISTS idx_items_feature_status_priority ON items(feature_id, status, priority);
     CREATE INDEX IF NOT EXISTS idx_events_scope ON events(scope_kind, scope_id, id DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_item_gates_open ON item_gates(item_id, gate_kind) WHERE state IN ('pending', 'approved', 'waived');
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_feature_gates_open ON feature_gates(feature_id, gate_kind) WHERE state IN ('pending', 'approved', 'waived');
     CREATE VIEW IF NOT EXISTS gates AS
-      SELECT 'item' AS target_kind, item_id AS target_id, gate_kind, state, binding_json, updated_at FROM item_gates
-      UNION ALL
-      SELECT 'feature' AS target_kind, feature_id AS target_id, gate_kind, state, binding_json, updated_at FROM feature_gates;
+      SELECT 'item' AS target_kind, item_id AS target_id, gate_kind, state, binding_json, updated_at FROM item_gates;
     CREATE VIEW IF NOT EXISTS waivers AS
-      SELECT 'item' AS scope_kind, item_id AS scope_id, gate_kind, mode, expires_at, remaining_uses, updated_at FROM item_waivers
-      UNION ALL
-      SELECT 'feature' AS scope_kind, feature_id AS scope_id, gate_kind, mode, expires_at, remaining_uses, updated_at FROM feature_waivers
-      UNION ALL
-      SELECT 'area' AS scope_kind, area_id AS scope_id, gate_kind, mode, expires_at, remaining_uses, updated_at FROM area_waivers;
+      SELECT 'item' AS scope_kind, item_id AS scope_id, gate_kind, mode, expires_at, remaining_uses, updated_at FROM item_waivers;
   `);
-  bumpUserVersionAtLeast(2);
 }
 
 function insertEventRow(event) {
@@ -400,73 +278,6 @@ export function setItemGate({ itemId, gateKind, state, binding = {}, actor = "ba
   });
 }
 
-export function setFeatureGate({ featureId, gateKind, state, binding = {}, actor = "backlog", correlationId = null }) {
-  return writeWithEvent((database) => {
-    database.prepare(`
-      INSERT INTO feature_gates (feature_id, gate_kind, state, binding_json, updated_at)
-      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(feature_id, gate_kind) DO UPDATE SET
-        state = excluded.state,
-        binding_json = excluded.binding_json,
-        updated_at = CURRENT_TIMESTAMP
-    `).run(featureId, gateKind, state, JSON.stringify(binding));
-  }, {
-    actor,
-    scopeKind: "feature",
-    scopeId: featureId,
-    kind: "feature_gate_set",
-    payload: { gateKind, state, binding },
-    correlationId,
-  });
-}
-
-export function setLoopState({ featureId, status, continuationsFired = 0, inFlight = false, actor = "backlog", correlationId = null }) {
-  return writeWithEvent((database) => {
-    database.prepare(`
-      INSERT INTO loop_state (feature_id, status, continuations_fired, in_flight, updated_at)
-      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(feature_id) DO UPDATE SET
-        status = excluded.status,
-        continuations_fired = excluded.continuations_fired,
-        in_flight = excluded.in_flight,
-        updated_at = CURRENT_TIMESTAMP
-    `).run(featureId, status, continuationsFired, inFlight ? 1 : 0);
-  }, {
-    actor,
-    scopeKind: "feature",
-    scopeId: featureId,
-    kind: "loop_state_set",
-    payload: { status, continuationsFired, inFlight: !!inFlight },
-    correlationId,
-  });
-}
-
-export function setLease({ featureId, leaseId, ownerSession, repoRoot, worktreePath = null, heartbeatAt, expiresAt, runEpoch = 0, status = "active", needsRecovery = false, actor = "backlog", correlationId = null }) {
-  return writeWithEvent((database) => {
-    database.prepare(`
-      INSERT INTO leases (feature_id, lease_id, owner_session, repo_root, worktree_path, heartbeat_at, expires_at, run_epoch, status, needs_recovery)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(feature_id) DO UPDATE SET
-        lease_id = excluded.lease_id,
-        owner_session = excluded.owner_session,
-        repo_root = excluded.repo_root,
-        worktree_path = excluded.worktree_path,
-        heartbeat_at = excluded.heartbeat_at,
-        expires_at = excluded.expires_at,
-        run_epoch = excluded.run_epoch,
-        status = excluded.status,
-        needs_recovery = excluded.needs_recovery
-    `).run(featureId, leaseId, ownerSession, repoRoot, worktreePath, heartbeatAt, expiresAt, runEpoch, status, needsRecovery ? 1 : 0);
-  }, {
-    actor,
-    scopeKind: "feature",
-    scopeId: featureId,
-    kind: "lease_set",
-    payload: { leaseId, ownerSession, repoRoot, worktreePath, heartbeatAt, expiresAt, runEpoch, status, needsRecovery: !!needsRecovery },
-    correlationId,
-  });
-}
-
 export function setItemWaiver({ itemId, gateKind, mode, expiresAt = null, remainingUses = null, actor = "backlog", correlationId = null }) {
   return writeWithEvent((database) => {
     database.prepare(`
@@ -499,40 +310,31 @@ function replayEvent(event) {
         binding_json = excluded.binding_json,
         updated_at = excluded.updated_at
     `).run(event.scope_id, payload.gateKind, payload.state, JSON.stringify(payload.binding || {}), event.ts);
-  } else if (event.kind === "feature_gate_set") {
+  } else if (event.kind === "queue_loop_state_set") {
     db.prepare(`
-      INSERT INTO feature_gates (feature_id, gate_kind, state, binding_json, updated_at)
+      INSERT INTO queue_loop_state (queue_id, status, continuations_fired, in_flight, updated_at)
       VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(feature_id, gate_kind) DO UPDATE SET
-        state = excluded.state,
-        binding_json = excluded.binding_json,
-        updated_at = excluded.updated_at
-    `).run(event.scope_id, payload.gateKind, payload.state, JSON.stringify(payload.binding || {}), event.ts);
-  } else if (event.kind === "loop_state_set") {
-    db.prepare(`
-      INSERT INTO loop_state (feature_id, status, continuations_fired, in_flight, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(feature_id) DO UPDATE SET
+      ON CONFLICT(queue_id) DO UPDATE SET
         status = excluded.status,
         continuations_fired = excluded.continuations_fired,
         in_flight = excluded.in_flight,
         updated_at = excluded.updated_at
     `).run(event.scope_id, payload.status, payload.continuationsFired || 0, payload.inFlight ? 1 : 0, event.ts);
-  } else if (event.kind === "lease_set") {
+  } else if (event.kind === "item_lease_set") {
     db.prepare(`
-      INSERT INTO leases (feature_id, lease_id, owner_session, repo_root, worktree_path, heartbeat_at, expires_at, run_epoch, status, needs_recovery)
+      INSERT INTO item_leases (item_id, lease_id, owner_session, repo_root, worktree_path, heartbeat_at, expires_at, status, needs_recovery, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(feature_id) DO UPDATE SET
+      ON CONFLICT(item_id) DO UPDATE SET
         lease_id = excluded.lease_id,
         owner_session = excluded.owner_session,
         repo_root = excluded.repo_root,
         worktree_path = excluded.worktree_path,
         heartbeat_at = excluded.heartbeat_at,
         expires_at = excluded.expires_at,
-        run_epoch = excluded.run_epoch,
         status = excluded.status,
-        needs_recovery = excluded.needs_recovery
-    `).run(event.scope_id, payload.leaseId, payload.ownerSession, payload.repoRoot, payload.worktreePath || null, payload.heartbeatAt, payload.expiresAt, payload.runEpoch || 0, payload.status || "active", payload.needsRecovery ? 1 : 0);
+        needs_recovery = excluded.needs_recovery,
+        updated_at = excluded.updated_at
+    `).run(event.scope_id, payload.leaseId, payload.ownerSession, payload.repoRoot, payload.worktreePath || null, payload.heartbeatAt, payload.expiresAt, payload.status || "active", payload.needsRecovery ? 1 : 0, event.ts);
   } else if (event.kind === "item_waiver_set") {
     db.prepare(`
       INSERT INTO item_waivers (item_id, gate_kind, mode, expires_at, remaining_uses, updated_at)
@@ -550,12 +352,9 @@ export function rebuildProjectionsFromEvents() {
   return tx(() => {
     db.exec(`
       DELETE FROM item_gates;
-      DELETE FROM feature_gates;
       DELETE FROM item_waivers;
-      DELETE FROM feature_waivers;
-      DELETE FROM area_waivers;
-      DELETE FROM leases;
-      DELETE FROM loop_state;
+      DELETE FROM item_leases;
+      DELETE FROM queue_loop_state;
     `);
     const events = db.prepare("SELECT * FROM events ORDER BY id").all();
     for (const event of events) replayEvent(event);
@@ -797,7 +596,10 @@ function ensureQueueSchema() {
 }
 
 function backfillItemQueues() {
-  const rows = db.prepare("SELECT id, feature_id FROM items WHERE queue_id IS NULL OR queue_id = ''").all();
+  const hasLegacyFeatureColumn = itemColumns().includes("feature_id");
+  const rows = hasLegacyFeatureColumn
+    ? db.prepare("SELECT id, feature_id FROM items WHERE queue_id IS NULL OR queue_id = ''").all()
+    : db.prepare("SELECT id, NULL AS feature_id FROM items WHERE queue_id IS NULL OR queue_id = ''").all();
   for (const row of rows) {
     const queueId = row.feature_id ? `feature-${row.feature_id}` : "inbox";
     ensureQueue(queueId, {

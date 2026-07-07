@@ -21,7 +21,6 @@ function decisionFromRow(row) {
     description: row.description,
     status: row.status,
     queueId: row.queueId || null,
-    featureId: row.featureId || null,
     gateState: row.gateState || "pending",
     binding: parseBinding(row.bindingJson),
   };
@@ -52,7 +51,6 @@ export function requestItemReview({ store = createStore(), itemId, summary = "",
     description: item.description,
     status: "needs_review",
     queueId: item.queue_id || null,
-    featureId: item.feature_id || null,
     gateState: "pending",
     binding: gateBinding,
   };
@@ -90,7 +88,6 @@ export function listHumanDecisions({ store = createStore() } = {}) {
       i.description,
       i.status,
       i.queue_id AS queueId,
-      i.feature_id AS featureId,
       COALESCE(g.state, 'pending') AS gateState,
       COALESCE(g.binding_json, '{}') AS bindingJson
     FROM items i
@@ -104,7 +101,6 @@ export function listHumanDecisions({ store = createStore() } = {}) {
       i.description,
       i.status,
       i.queue_id AS queueId,
-      i.feature_id AS featureId,
       COALESCE(g.state, 'pending') AS gateState,
       COALESCE(g.binding_json, '{}') AS bindingJson
     FROM items i

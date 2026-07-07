@@ -8,7 +8,7 @@ const cases = [
   [{ provider: "git", globalPreference: "sidequest", capabilities: { sidequest: false } }, "unavailable", true, "git_sidequest_unavailable"],
   [{ provider: "soda", globalPreference: "sidequest", capabilities: { sidequest: true } }, "sidequest", false, "preferred_sidequest"],
   [{ provider: "soda", globalPreference: "sidequest", repoPreference: "in-place", capabilities: { sidequest: true } }, "in-place", false, "preferred_in_place"],
-  [{ provider: "soda", globalPreference: "sidequest", repoPreference: "in-place", featurePreference: "sidequest", capabilities: { sidequest: true } }, "sidequest", false, "preferred_sidequest"],
+  [{ provider: "soda", globalPreference: "sidequest", repoPreference: "in-place", queuePreference: "sidequest", capabilities: { sidequest: true } }, "sidequest", false, "preferred_sidequest"],
 ];
 
 for (const [input, mode, requiresApproval, reason] of cases) {

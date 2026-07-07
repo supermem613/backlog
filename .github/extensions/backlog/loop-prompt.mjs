@@ -1,9 +1,9 @@
 export const COMPLETE_TOKEN = "BACKLOG_ITEM_COMPLETE:";
 export const BLOCKED_TOKEN = "BACKLOG_ITEM_BLOCKED:";
 
-export function buildLoopContinuationPrompt({ feature, item, turn }) {
+export function buildLoopContinuationPrompt({ queue, item, turn }) {
   return [
-    `[backlog loop turn ${turn}] Continue feature "${feature.title}" on item [${item.id}]: ${item.description}.`,
+    `[backlog loop turn ${turn}] Continue queue "${queue.name}" on item [${item.id}]: ${item.description}.`,
     "When the item work is fully met, end your reply with a line:",
     `${COMPLETE_TOKEN} <one-sentence summary>`,
     "If there is no viable next step without user input, end with:",

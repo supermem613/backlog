@@ -97,7 +97,7 @@ export function getTopItem(sessionId, queueId = null) {
   ).get(sessionId, queue, "pending");
 }
 
-export function addItem(sessionId, description, isTop = false, featureId = null, queueId = null) {
+export function addItem(sessionId, description, isTop = false, queueId = null) {
   const queue = normalizeQueueId(queueId);
   const out = tx(() => {
     ensureSession(sessionId);
@@ -112,8 +112,8 @@ export function addItem(sessionId, description, isTop = false, featureId = null,
       position = getNextPosition(sessionId, queue);
     }
     db.prepare(
-      "INSERT INTO items (id, session_id, description, position, feature_id, queue_id) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(id, sessionId, description, position, featureId, queue);
+      "INSERT INTO items (id, session_id, description, position, queue_id) VALUES (?, ?, ?, ?, ?)"
+    ).run(id, sessionId, description, position, queue);
     return { id, position, queue_id: queue };
   });
   clearViewerSuppression();

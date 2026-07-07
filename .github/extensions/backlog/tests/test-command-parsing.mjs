@@ -41,10 +41,8 @@ const queuedItem = addItem(sid, "queue default");
 const queuedItemRow = db.prepare("SELECT queue_id FROM items WHERE id = ?").get(queuedItem.id);
 assertEqual(queuedItemRow.queue_id, "inbox", "new items default to the Inbox queue");
 
-db.prepare("INSERT INTO areas (id, name) VALUES (?, ?)").run("cmd-area", "Command Area");
-db.prepare("INSERT INTO features (id, area_id, title, status) VALUES (?, ?, ?, ?)").run("cmd-feature", "cmd-area", "Command feature", "approved");
 const gatedId = firstId;
-db.prepare("UPDATE items SET feature_id = ?, status = ? WHERE id = ?").run("cmd-feature", "proposed", gatedId);
+db.prepare("UPDATE items SET status = ? WHERE id = ?").run("proposed", gatedId);
 const approveOut = await handleBacklogCommand(sid, `approve ${gatedId}`);
 assert(/Approved start/.test(approveOut), `approve command opens start gate, got: ${approveOut}`);
 db.prepare("UPDATE items SET status = ? WHERE id = ?").run("needs_review", gatedId);

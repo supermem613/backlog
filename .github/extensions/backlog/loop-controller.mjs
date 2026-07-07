@@ -3,58 +3,30 @@ import { blockedItemState, canRunItem, completeItemState } from "./loop-state.mj
 import { formatHumanDecisionNotice, requestItemReview } from "./review-channel.mjs";
 import { createStore } from "./store.mjs";
 
-function getEffectiveQueueId({ store, featureId, queueId }) {
-  if (queueId) return queueId;
-  const queue = store.getQueue(featureId);
-  return queue?.id || null;
-}
-
-export function createLoopController({ session, store = createStore(), featureId, queueId = null, sessionId, repoRoot, worktreePath = null, log = () => {}, notify = log }) {
+export function createLoopController({ session, store = createStore(), queueId, sessionId, repoRoot, worktreePath = null, log = () => {}, notify = log }) {
   let stopped = false;
   let inFlightItemId = null;
-  const effectiveQueueId = getEffectiveQueueId({ store, featureId, queueId });
+  const effectiveQueueId = queueId;
 
   async function setLoop(status, continuationsFired = 0, inFlight = false) {
-    store.setLoopState({ featureId, queueId: effectiveQueueId, status, continuationsFired, inFlight, actor: "loop" });
+    store.setLoopState({ queueId: effectiveQueueId, status, continuationsFired, inFlight, actor: "loop" });
   }
 
   function getActiveItemForTarget() {
-    if (effectiveQueueId) {
-      return store.database.prepare("SELECT * FROM items WHERE queue_id = ? AND status = ?").get(effectiveQueueId, "running") || null;
-    }
-    return store.database.prepare("SELECT * FROM items WHERE feature_id = ? AND status = ?").get(featureId, "running") || null;
+    return store.database.prepare("SELECT * FROM items WHERE queue_id = ? AND status = ?").get(effectiveQueueId, "running") || null;
   }
 
   function getNextItemForTarget() {
-    if (effectiveQueueId) {
-      const queueItem = store.getNextRunnableItem(effectiveQueueId);
-      if (queueItem) return queueItem;
-    }
-    return store.getNextRunnableItem(featureId);
+    return store.getNextRunnableItem(effectiveQueueId);
   }
 
   return {
     async start() {
       stopped = false;
       const now = new Date().toISOString();
-      const targetLeaseId = `${featureId}-${sessionId}`;
-      store.setLease({
-        featureId,
-        queueId: effectiveQueueId,
-        itemId: null,
-        leaseId: targetLeaseId,
-        ownerSession: sessionId,
-        repoRoot,
-        worktreePath,
-        heartbeatAt: now,
-        expiresAt: now,
-        runEpoch: 1,
-        actor: "loop",
-      });
       const item = getNextItemForTarget();
       if (item) {
         store.setLease({
-          featureId,
           queueId: effectiveQueueId,
           itemId: item.id,
           leaseId: `${item.id}-${sessionId}`,
@@ -68,23 +40,22 @@ export function createLoopController({ session, store = createStore(), featureId
         });
       }
       await setLoop("running", 0, false);
-      log(`backlog loop started for ${featureId}`);
+      log(`backlog loop started for ${effectiveQueueId}`);
     },
 
     async stop() {
       stopped = true;
-      const current = store.getLoopState(featureId);
+      const current = store.getLoopState(effectiveQueueId);
       await setLoop("stopped", current?.continuations_fired || 0, false);
-      log(`backlog loop stopped for ${featureId}`);
+      log(`backlog loop stopped for ${effectiveQueueId}`);
     },
 
     async onIdle() {
       if (stopped) return { fired: false, reason: "stopped" };
-      const feature = store.getFeature(featureId);
-      if (!feature) return { fired: false, reason: "missing_feature" };
-      const loopState = store.getLoopState(featureId);
-      const queueLoopState = effectiveQueueId ? store.getLoopState(effectiveQueueId) : null;
-      if (loopState?.in_flight || queueLoopState?.in_flight) return { fired: false, reason: "already_in_flight" };
+      const queue = store.getQueue(effectiveQueueId);
+      if (!queue) return { fired: false, reason: "missing_queue" };
+      const loopState = store.getLoopState(effectiveQueueId);
+      if (loopState?.in_flight) return { fired: false, reason: "already_in_flight" };
       const item = getNextItemForTarget();
       const active = getActiveItemForTarget();
       const decision = canRunItem({ item, startGate: item ? store.getGate("item", item.id, "start") : null, activeItem: active || null });
@@ -93,7 +64,6 @@ export function createLoopController({ session, store = createStore(), featureId
       const turn = (loopState?.continuations_fired || 0) + 1;
       store.transitionItem({ itemId: item.id, status: "running", actor: "loop" });
       store.setLease({
-        featureId,
         queueId: effectiveQueueId,
         itemId: item.id,
         leaseId: `${item.id}-${sessionId}`,
@@ -107,7 +77,7 @@ export function createLoopController({ session, store = createStore(), featureId
       });
       await setLoop("running", turn, true);
       inFlightItemId = item.id;
-      await session.send({ prompt: buildLoopContinuationPrompt({ feature, item, turn }) });
+      await session.send({ prompt: buildLoopContinuationPrompt({ queue, item, turn }) });
       return { fired: true, itemId: item.id, turn };
     },
 
@@ -117,7 +87,7 @@ export function createLoopController({ session, store = createStore(), featureId
       if (complete) {
         store.transitionItem({ itemId: inFlightItemId, status: completeItemState(), actor: "loop" });
         const reviewDecision = requestItemReview({ store, itemId: inFlightItemId, summary: complete, actor: "loop" });
-        const current = store.getLoopState(featureId);
+        const current = store.getLoopState(effectiveQueueId);
         await setLoop("needs_review", current?.continuations_fired || 0, false);
         notify(formatHumanDecisionNotice([reviewDecision]));
         inFlightItemId = null;
@@ -126,7 +96,7 @@ export function createLoopController({ session, store = createStore(), featureId
       const blocked = detectBlocked(content);
       if (!blocked) return { changed: false };
       store.transitionItem({ itemId: inFlightItemId, status: blockedItemState(), actor: "loop" });
-      const current = store.getLoopState(featureId);
+      const current = store.getLoopState(effectiveQueueId);
       await setLoop("blocked", current?.continuations_fired || 0, false);
       inFlightItemId = null;
       return { changed: true, status: "blocked", summary: blocked };
@@ -134,7 +104,7 @@ export function createLoopController({ session, store = createStore(), featureId
 
     markExpiredLeaseNeedsRecovery() {
       if (!inFlightItemId) return null;
-      store.markLeaseNeedsRecovery({ itemId: inFlightItemId, featureId, actor: "loop" });
+      store.markLeaseNeedsRecovery({ itemId: inFlightItemId, actor: "loop" });
       store.transitionItem({ itemId: inFlightItemId, status: "needs_recovery", actor: "loop" });
       return store.getLease({ itemId: inFlightItemId });
     },

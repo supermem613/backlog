@@ -8,13 +8,6 @@ const BACKUP_VERSION = 1;
 const TABLES = [
   "sessions",
   "settings",
-  "areas",
-  "features",
-  "feature_pors",
-  "feature_prs",
-  "feature_sidequests",
-  "feature_attachments",
-  "feature_isolation_units",
   "queues",
   "items",
   "item_pors",
@@ -24,12 +17,7 @@ const TABLES = [
   "queue_loop_state",
   "events",
   "item_gates",
-  "feature_gates",
   "item_waivers",
-  "feature_waivers",
-  "area_waivers",
-  "leases",
-  "loop_state",
 ];
 
 function defaultBackupPath() {

@@ -129,7 +129,7 @@ export function setSessionRef(ref)     { sidecarState.sessionRef = ref; }
 
 export function getCurrentItems(sessionId) {
   return db.prepare(`
-    SELECT id, description, position, queue_id, feature_id, priority, status, created_at
+    SELECT id, description, position, queue_id, priority, status, created_at
     FROM items
     WHERE session_id = ? AND status = ? AND (queue_id = ? OR queue_id IS NULL)
     ORDER BY position
@@ -673,7 +673,7 @@ export async function handleHttp(req, res) {
     let result = null;
     const queueId = body.queueId || null;
     switch (body.op) {
-      case "add":    result = addItem(sid, body.description || "", false, body.featureId || null, queueId); break;
+      case "add": result = addItem(sid, body.description || "", false, queueId); break;
       case "up":     result = moveUp(sid, body.id, queueId); break;
       case "down":   result = moveDown(sid, body.id, queueId); break;
       case "edit":   result = editItem(sid, body.id, body.description, queueId); break;
@@ -1046,7 +1046,7 @@ function startClientHeartbeatPoll() {
 // ---- Election + boot ----
 
 // Try to bind the shared port. Win → owner. EADDRINUSE → client. Anything
-// else → log and stay in null role (no viewer features for this session).
+// else → log and stay in null role for this session.
 // Guarded against re-entry during the listen() async window so we don't
 // spawn two competing election servers in the same process.
 export function tryStartSidecar() {

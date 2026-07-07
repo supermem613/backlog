@@ -42,14 +42,14 @@ export function isGateSatisfied(gate) {
   return gate?.state === "approved" || gate?.state === "waived";
 }
 
-export function canRunItem({ item, startGate, featureActiveItem, activeItem = featureActiveItem }) {
+export function canRunItem({ item, startGate, activeItem = null }) {
   if (!item || item.status !== "approved") return { ok: false, reason: "item_not_approved" };
   if (!isGateSatisfied(startGate)) return { ok: false, reason: "start_gate_required" };
-  if (activeItem && activeItem.id !== item.id) return { ok: false, reason: "feature_has_active_item" };
+  if (activeItem && activeItem.id !== item.id) return { ok: false, reason: "queue_has_active_item" };
   return { ok: true, reason: "ready" };
 }
 
-export function canFinishFeature({ reviewGate }) {
+export function canFinishItem({ reviewGate }) {
   if (!isGateSatisfied(reviewGate)) return { ok: false, reason: "review_gate_required" };
   return { ok: true, reason: "ready" };
 }

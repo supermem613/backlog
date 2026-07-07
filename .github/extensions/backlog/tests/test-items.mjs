@@ -92,7 +92,7 @@ assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_gates WHERE item_id =
 
 const queue = createQueue({ id: "custom-queue", name: "Custom" });
 assertEqual(queue.name, "Custom", "createQueue creates a named queue");
-const queuedItem = addItem(sid, "queue-backed task", false, null, "custom-queue");
+const queuedItem = addItem(sid, "queue-backed task", false, "custom-queue");
 assertEqual(queuedItem.queue_id, "custom-queue", "queue-backed items inherit the requested queue");
 assertEqual(getPendingCount(sid, "custom-queue"), 1, "queue-aware pending counts are scoped by queue");
 const por = attachItemPorContext({ itemId: queuedItem.id, porId: "por-1", metadata: { source: "test" } });

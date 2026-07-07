@@ -11,10 +11,8 @@ import {
   requestItemReview,
 } from "../review-channel.mjs";
 
-db.prepare("INSERT INTO areas (id, name) VALUES (?, ?)").run("review-area", "Review Area");
-db.prepare("INSERT INTO features (id, area_id, title, status) VALUES (?, ?, ?, ?)").run("review-feature", "review-area", "Review feature", "approved");
-const item = addItem("review-session", "review gated item");
-db.prepare("UPDATE items SET feature_id = ?, status = ? WHERE id = ?").run("review-feature", "proposed", item.id);
+const item = addItem("review-session", "review gated item", false, "review-queue");
+db.prepare("UPDATE items SET status = ? WHERE id = ?").run("proposed", item.id);
 
 const store = createStore();
 const start = approveItemStart({ store, itemId: item.id, actor: "human", binding: { source: "test" } });
