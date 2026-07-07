@@ -42,10 +42,10 @@ export function isGateSatisfied(gate) {
   return gate?.state === "approved" || gate?.state === "waived";
 }
 
-export function canRunItem({ item, startGate, featureActiveItem }) {
+export function canRunItem({ item, startGate, featureActiveItem, activeItem = featureActiveItem }) {
   if (!item || item.status !== "approved") return { ok: false, reason: "item_not_approved" };
   if (!isGateSatisfied(startGate)) return { ok: false, reason: "start_gate_required" };
-  if (featureActiveItem && featureActiveItem.id !== item.id) return { ok: false, reason: "feature_has_active_item" };
+  if (activeItem && activeItem.id !== item.id) return { ok: false, reason: "feature_has_active_item" };
   return { ok: true, reason: "ready" };
 }
 

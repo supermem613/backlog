@@ -30,6 +30,7 @@ assertEqual(store.getGate("item", item.id, "review").state, "pending", "review r
 const decisions = listHumanDecisions({ store });
 assertEqual(decisions.length, 1, "one human decision is pending");
 assertEqual(decisions[0].itemId, item.id, "decision points at the item");
+assertEqual(decisions[0].queueId, db.prepare("SELECT queue_id FROM items WHERE id = ?").get(item.id).queue_id, "decision carries the queue id");
 assert(/\/backlog review/.test(formatHumanDecisionNotice(decisions)), "notice tells the human how to review");
 
 const reviewed = approveItemReview({ store, itemId: item.id, actor: "human", binding: { verdict: "accepted" } });

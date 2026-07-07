@@ -32,9 +32,9 @@ assertEqual(runtime.list().length, 1, "runtime tracks started controller");
 
 await runtime.onIdle();
 assertEqual(sent.length, 1, "runtime forwards idle to controller");
-assert(/BACKLOG_COMPLETE:/.test(sent[0].prompt), "runtime prompt uses backlog completion token");
+assert(/BACKLOG_ITEM_COMPLETE:/.test(sent[0].prompt), "runtime prompt uses backlog item completion token");
 
-await runtime.onAssistantMessage({ data: { content: "done\nBACKLOG_COMPLETE: runtime done" } });
+await runtime.onAssistantMessage({ data: { content: "done\nBACKLOG_ITEM_COMPLETE: runtime done" } });
 assertEqual(db.prepare("SELECT status FROM items WHERE id = ?").get(item.id).status, "needs_review", "runtime forwards assistant completion");
 assert(/\/backlog review/.test(notices.at(-1)), "runtime forwards review notice");
 

@@ -4,7 +4,7 @@ const START_BLOCKED_STATUSES = new Set(["running", "needs_review", "reviewed", "
 
 function requireItem(store, itemId) {
   if (!itemId) throw new Error("item id required");
-  const item = store.database.prepare("SELECT * FROM items WHERE id = ?").get(itemId);
+  const item = store.getItem(itemId);
   if (!item) throw new Error(`item '${itemId}' not found`);
   return item;
 }
@@ -20,6 +20,7 @@ function decisionFromRow(row) {
     itemId: row.itemId,
     description: row.description,
     status: row.status,
+    queueId: row.queueId || null,
     featureId: row.featureId || null,
     gateState: row.gateState || "pending",
     binding: parseBinding(row.bindingJson),
@@ -50,6 +51,7 @@ export function requestItemReview({ store = createStore(), itemId, summary = "",
     itemId,
     description: item.description,
     status: "needs_review",
+    queueId: item.queue_id || null,
     featureId: item.feature_id || null,
     gateState: "pending",
     binding: gateBinding,
@@ -87,6 +89,7 @@ export function listHumanDecisions({ store = createStore() } = {}) {
       i.id AS itemId,
       i.description,
       i.status,
+      i.queue_id AS queueId,
       i.feature_id AS featureId,
       COALESCE(g.state, 'pending') AS gateState,
       COALESCE(g.binding_json, '{}') AS bindingJson
@@ -100,6 +103,7 @@ export function listHumanDecisions({ store = createStore() } = {}) {
       i.id AS itemId,
       i.description,
       i.status,
+      i.queue_id AS queueId,
       i.feature_id AS featureId,
       COALESCE(g.state, 'pending') AS gateState,
       COALESCE(g.binding_json, '{}') AS bindingJson
