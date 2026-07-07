@@ -26,6 +26,15 @@ const FRICTION_COLUMNS = [
   "last_seen_at",
 ];
 
+function parseMetadataJson(value) {
+  if (!value) return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
 export function initBacklog(dirOverride) {
   if (db) return db;
   BACKLOG_DIR = dirOverride || join(homedir(), ".backlog");
@@ -53,6 +62,8 @@ export function initBacklog(dirOverride) {
       position INTEGER NOT NULL,
       feature_id TEXT,
       priority INTEGER DEFAULT 0,
+      queue_id TEXT,
+      por_json TEXT,
       status TEXT DEFAULT 'pending',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -75,7 +86,10 @@ export function initBacklog(dirOverride) {
   migrateRemoveFrictionStorage();
   addColumnIfMissing("items", "feature_id", "TEXT");
   addColumnIfMissing("items", "priority", "INTEGER DEFAULT 0");
+  addColumnIfMissing("items", "queue_id", "TEXT");
+  addColumnIfMissing("items", "por_json", "TEXT");
   ensureSubstrateSchema();
+  ensureQueueSchema();
   // Note: a legacy `pinned` column may exist on older installs. We never read
   // or write it — pinning was removed; the viewer is dismissed by closing the
   // window, and re-opens automatically when new items are added or
@@ -609,10 +623,16 @@ export function deleteItemDependentsByIds(itemIds) {
   const placeholders = itemIds.map(() => "?").join(", ");
   db.prepare(`DELETE FROM item_gates WHERE item_id IN (${placeholders})`).run(...itemIds);
   db.prepare(`DELETE FROM item_waivers WHERE item_id IN (${placeholders})`).run(...itemIds);
+  db.prepare(`DELETE FROM item_pors WHERE item_id IN (${placeholders})`).run(...itemIds);
+  db.prepare(`DELETE FROM item_attachments WHERE item_id IN (${placeholders})`).run(...itemIds);
+  db.prepare(`DELETE FROM item_isolation_units WHERE item_id IN (${placeholders})`).run(...itemIds);
+  db.prepare(`DELETE FROM item_leases WHERE item_id IN (${placeholders})`).run(...itemIds);
 }
 
-export function deleteItemDependentsForSession(sessionId) {
-  const itemIds = db.prepare("SELECT id FROM items WHERE session_id = ?").all(sessionId).map((row) => row.id);
+export function deleteItemDependentsForSession(sessionId, queueId = null) {
+  const itemIds = queueId
+    ? db.prepare("SELECT id FROM items WHERE session_id = ? AND queue_id = ?").all(sessionId, queueId).map((row) => row.id)
+    : db.prepare("SELECT id FROM items WHERE session_id = ?").all(sessionId).map((row) => row.id);
   deleteItemDependentsByIds(itemIds);
 }
 
@@ -636,4 +656,263 @@ export function pruneSessions(days = 7) {
     }
     return stale.length;
   });
+}
+
+function queueRowToObject(row) {
+  return {
+    ...row,
+    metadata: row.metadata_json ? parseMetadataJson(row.metadata_json) : {},
+  };
+}
+
+export function createQueue({ id, name, description = null, metadata = {} } = {}) {
+  const queueId = id || `queue-${Date.now()}`;
+  const existing = getQueue(queueId);
+  if (existing) return existing;
+  db.prepare(`
+    INSERT INTO queues (id, name, description, metadata_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(queueId, name || queueId, description, JSON.stringify(metadata || {}));
+  return getQueue(queueId);
+}
+
+export function ensureQueue(queueId, { name = null, description = null, metadata = undefined } = {}) {
+  if (!queueId) queueId = "inbox";
+  const existing = getQueue(queueId);
+  if (existing) {
+    if (name !== null || description !== null || metadata !== undefined) {
+      updateQueue(queueId, { name, description, metadata });
+    }
+    return existing;
+  }
+  return createQueue({ id: queueId, name: name || queueId, description, metadata: metadata ?? {} });
+}
+
+export function getQueue(queueId) {
+  if (!queueId) return null;
+  const row = db.prepare("SELECT * FROM queues WHERE id = ?").get(queueId);
+  return row ? queueRowToObject(row) : null;
+}
+
+export function listQueues() {
+  return db.prepare("SELECT * FROM queues ORDER BY name, created_at").all().map(queueRowToObject);
+}
+
+export function updateQueue(queueId, { name = undefined, description = undefined, metadata = undefined } = {}) {
+  const updates = [];
+  const params = [];
+  if (name !== undefined) {
+    updates.push("name = ?");
+    params.push(name);
+  }
+  if (description !== undefined) {
+    updates.push("description = ?");
+    params.push(description);
+  }
+  if (metadata !== undefined) {
+    updates.push("metadata_json = ?");
+    params.push(JSON.stringify(metadata || {}));
+  }
+  if (!updates.length) return getQueue(queueId);
+  updates.push("updated_at = CURRENT_TIMESTAMP");
+  params.push(queueId);
+  db.prepare(`UPDATE queues SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+  return getQueue(queueId);
+}
+
+export function ensureDefaultInboxQueue() {
+  return ensureQueue("inbox", { name: "Inbox", description: "Default backlog queue", metadata: { kind: "inbox" } });
+}
+
+function ensureQueueSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS queues (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS item_pors (
+      item_id TEXT PRIMARY KEY,
+      por_id TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'por',
+      meta_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS item_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('path', 'note')),
+      ref TEXT NOT NULL,
+      meta_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS item_isolation_units (
+      item_id TEXT PRIMARY KEY,
+      repo_root TEXT NOT NULL,
+      path TEXT NOT NULL,
+      provider TEXT NOT NULL CHECK (provider IN ('soda', 'git')),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS item_leases (
+      item_id TEXT PRIMARY KEY,
+      lease_id TEXT NOT NULL,
+      owner_session TEXT NOT NULL,
+      repo_root TEXT NOT NULL,
+      worktree_path TEXT,
+      heartbeat_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      needs_recovery INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS queue_loop_state (
+      queue_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      continuations_fired INTEGER NOT NULL DEFAULT 0,
+      in_flight INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (queue_id) REFERENCES queues(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_items_queue_status_position ON items(queue_id, status, position);
+    CREATE INDEX IF NOT EXISTS idx_item_pors_item ON item_pors(item_id);
+    CREATE INDEX IF NOT EXISTS idx_item_attachments_item ON item_attachments(item_id);
+    CREATE INDEX IF NOT EXISTS idx_item_isolation_units_item ON item_isolation_units(item_id);
+    CREATE INDEX IF NOT EXISTS idx_item_leases_item ON item_leases(item_id);
+  `);
+  addColumnIfMissing("queues", "description", "TEXT");
+  addColumnIfMissing("queues", "metadata_json", "TEXT DEFAULT '{}'" );
+  addColumnIfMissing("items", "queue_id", "TEXT");
+  addColumnIfMissing("items", "por_json", "TEXT");
+  ensureDefaultInboxQueue();
+  backfillItemQueues();
+  bumpUserVersionAtLeast(3);
+}
+
+function backfillItemQueues() {
+  const rows = db.prepare("SELECT id, feature_id FROM items WHERE queue_id IS NULL OR queue_id = ''").all();
+  for (const row of rows) {
+    const queueId = row.feature_id ? `feature-${row.feature_id}` : "inbox";
+    ensureQueue(queueId, {
+      name: row.feature_id ? `Feature ${row.feature_id}` : "Inbox",
+      description: row.feature_id ? `Compatibility queue for ${row.feature_id}` : "Default backlog queue",
+      metadata: row.feature_id ? { source: "feature-link" } : { kind: "inbox" },
+    });
+    db.prepare("UPDATE items SET queue_id = ? WHERE id = ?").run(queueId, row.id);
+  }
+}
+
+export function attachItemPorContext(input, maybeMetadata = {}) {
+  let itemId;
+  let porId = null;
+  let kind = "por";
+  let metadata = {};
+  if (typeof input === "object" && input !== null) {
+    itemId = input.itemId ?? input.item_id ?? input.id;
+    porId = input.porId ?? input.por_id ?? input.ref ?? null;
+    kind = input.kind ?? "por";
+    metadata = input.metadata ?? {};
+  } else {
+    itemId = input;
+    if (typeof maybeMetadata === "string") {
+      porId = maybeMetadata;
+    } else {
+      porId = maybeMetadata.porId ?? maybeMetadata.por_id ?? maybeMetadata.ref ?? null;
+      kind = maybeMetadata.kind ?? "por";
+      metadata = maybeMetadata.metadata ?? maybeMetadata ?? {};
+    }
+  }
+  if (!itemId) return null;
+  const resolvedPorId = porId || `por-${itemId}`;
+  db.prepare(`
+    INSERT INTO item_pors (item_id, por_id, kind, meta_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(item_id) DO UPDATE SET
+      por_id = excluded.por_id,
+      kind = excluded.kind,
+      meta_json = excluded.meta_json,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(itemId, resolvedPorId, kind, JSON.stringify(metadata || {}));
+  return getItemPorContext(itemId);
+}
+
+export function getItemPorContext(itemId) {
+  if (!itemId) return null;
+  const row = db.prepare("SELECT * FROM item_pors WHERE item_id = ?").get(itemId);
+  if (!row) return null;
+  return {
+    ...row,
+    metadata: row.meta_json ? parseMetadataJson(row.meta_json) : {},
+  };
+}
+
+export function removeItemPorContext(itemId) {
+  if (!itemId) return null;
+  const context = getItemPorContext(itemId);
+  db.prepare("DELETE FROM item_pors WHERE item_id = ?").run(itemId);
+  return context;
+}
+
+export function setQueueLoopState({ queueId, status, continuationsFired = 0, inFlight = false, actor = "backlog", correlationId = null }) {
+  return writeWithEvent((database) => {
+    database.prepare(`
+      INSERT INTO queue_loop_state (queue_id, status, continuations_fired, in_flight, updated_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(queue_id) DO UPDATE SET
+        status = excluded.status,
+        continuations_fired = excluded.continuations_fired,
+        in_flight = excluded.in_flight,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(queueId, status, continuationsFired, inFlight ? 1 : 0);
+  }, {
+    actor,
+    scopeKind: "queue",
+    scopeId: queueId,
+    kind: "queue_loop_state_set",
+    payload: { status, continuationsFired, inFlight: !!inFlight },
+    correlationId,
+  });
+}
+
+export function getQueueLoopState(queueId) {
+  const row = db.prepare("SELECT * FROM queue_loop_state WHERE queue_id = ?").get(queueId);
+  return row || null;
+}
+
+export function setItemLease({ itemId, leaseId, ownerSession, repoRoot, worktreePath = null, heartbeatAt, expiresAt, status = "active", needsRecovery = false, actor = "backlog", correlationId = null }) {
+  return writeWithEvent((database) => {
+    database.prepare(`
+      INSERT INTO item_leases (item_id, lease_id, owner_session, repo_root, worktree_path, heartbeat_at, expires_at, status, needs_recovery, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(item_id) DO UPDATE SET
+        lease_id = excluded.lease_id,
+        owner_session = excluded.owner_session,
+        repo_root = excluded.repo_root,
+        worktree_path = excluded.worktree_path,
+        heartbeat_at = excluded.heartbeat_at,
+        expires_at = excluded.expires_at,
+        status = excluded.status,
+        needs_recovery = excluded.needs_recovery,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(itemId, leaseId, ownerSession, repoRoot, worktreePath, heartbeatAt, expiresAt, status, needsRecovery ? 1 : 0);
+  }, {
+    actor,
+    scopeKind: "item",
+    scopeId: itemId,
+    kind: "item_lease_set",
+    payload: { leaseId, ownerSession, repoRoot, worktreePath, heartbeatAt, expiresAt, status, needsRecovery: !!needsRecovery },
+    correlationId,
+  });
+}
+
+export function getItemLease(itemId) {
+  const row = db.prepare("SELECT * FROM item_leases WHERE item_id = ?").get(itemId);
+  return row || null;
 }

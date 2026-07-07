@@ -15,14 +15,10 @@ db.exec(`
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   )
 `);
-const itemColumns = db.prepare("PRAGMA table_info(items)").all();
-if (!itemColumns.some((column) => column.name === "queue_id")) {
-  db.exec("ALTER TABLE items ADD COLUMN queue_id TEXT");
-}
 const queueId = "backup-queue";
 db.prepare("INSERT OR REPLACE INTO queues (id, name) VALUES (?, ?)").run(queueId, "Backup Queue");
 const item = addItem("backup-session", "persist through restore");
-db.prepare("UPDATE items SET queue_id = ? WHERE id = ?").run(queueId, item.id);
+db.prepare("UPDATE items SET queue_id = ?, status = ? WHERE id = ?").run(queueId, "approved", item.id);
 const store = createStore();
 store.setItemGate({ itemId: item.id, gateKind: "start", state: "approved", binding: { reason: "backup test" }, actor: "test" });
 
@@ -31,6 +27,8 @@ const exported = exportBacklogBackup({ outputPath: backupPath });
 assertEqual(exported.path, backupPath, "backup writes to requested path");
 assert(exported.sha256.length === 64, "backup reports sha256 checksum");
 assertEqual(JSON.parse(readFileSync(backupPath, "utf8")).manifest.sha256, exported.sha256, "backup file includes matching manifest checksum");
+
+assertEqual(JSON.parse(readFileSync(backupPath, "utf8")).manifest.tables.includes("queues"), true, "backup manifest records queue tables");
 
 db.prepare("UPDATE items SET description = ?, status = ? WHERE id = ?").run("mutated", "blocked", item.id);
 db.prepare("DELETE FROM queues WHERE id = ?").run(queueId);

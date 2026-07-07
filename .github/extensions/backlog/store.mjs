@@ -8,6 +8,12 @@ import {
   setLease,
   setLoopState,
   writeWithEvent,
+  createQueue,
+  listQueues,
+  updateQueue,
+  attachItemPorContext,
+  getItemPorContext,
+  removeItemPorContext,
 } from "./db.mjs";
 
 export class Store {
@@ -41,6 +47,30 @@ export class Store {
 
   setItemWaiver(input) {
     return setItemWaiver(input);
+  }
+
+  createQueue(input) {
+    return createQueue(input);
+  }
+
+  listQueues() {
+    return listQueues();
+  }
+
+  updateQueue(queueId, input) {
+    return updateQueue(queueId, input);
+  }
+
+  attachItemPorContext(input) {
+    return attachItemPorContext(input);
+  }
+
+  getItemPorContext(itemId) {
+    return getItemPorContext(itemId);
+  }
+
+  removeItemPorContext(itemId) {
+    return removeItemPorContext(itemId);
   }
 
   transitionItem({ itemId, status, actor = "backlog", correlationId = null }) {

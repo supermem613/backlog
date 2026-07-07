@@ -5,14 +5,15 @@ import {
   pruneSessions,
   setItemGate,
   setItemWaiver,
+  createQueue,
+  attachItemPorContext,
+  getItemPorContext,
+  removeItemPorContext,
 } from "../db.mjs";
 import {
   addItem,
   markDone,
   removeItem,
-  moveTop,
-  moveUp,
-  moveDown,
   editItem,
   clearSessionItems,
   getTopItem,
@@ -89,24 +90,22 @@ db.prepare("UPDATE sessions SET last_accessed = ? WHERE id = ?").run("2000-01-01
 assertEqual(pruneSessions(7), 1, "prune removes stale gated session");
 assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_gates WHERE item_id = ?").get(pruneItem.id).count, 0, "prune deletes item gates");
 
-const queueTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'queues'").get();
-if (!queueTable) {
-  db.exec("CREATE TABLE queues (id TEXT PRIMARY KEY, name TEXT NOT NULL)");
-}
-const itemColumns = db.prepare("PRAGMA table_info(items)").all();
-if (!itemColumns.some((column) => column.name === "queue_id")) {
-  db.exec("ALTER TABLE items ADD COLUMN queue_id TEXT");
-}
-if (!itemColumns.some((column) => column.name === "por_json")) {
-  db.exec("ALTER TABLE items ADD COLUMN por_json TEXT");
-}
-const inboxQueue = db.prepare("SELECT id FROM queues WHERE name = ?").get("Inbox");
-if (!inboxQueue) {
-  db.prepare("INSERT INTO queues (id, name) VALUES (?, ?)").run("inbox", "Inbox");
-}
-const queuedItem = addItem(sid, "queue-backed task");
+const queue = createQueue({ id: "custom-queue", name: "Custom" });
+assertEqual(queue.name, "Custom", "createQueue creates a named queue");
+const queuedItem = addItem(sid, "queue-backed task", false, null, "custom-queue");
+assertEqual(queuedItem.queue_id, "custom-queue", "queue-backed items inherit the requested queue");
+assertEqual(getPendingCount(sid, "custom-queue"), 1, "queue-aware pending counts are scoped by queue");
+const por = attachItemPorContext({ itemId: queuedItem.id, porId: "por-1", metadata: { source: "test" } });
+assertEqual(por.por_id, "por-1", "attachItemPorContext stores an item POR record");
+const roundTrip = getItemPorContext(queuedItem.id);
+assertEqual(roundTrip.metadata.source, "test", "POR context metadata round-trips through storage");
+const removedPor = removeItemPorContext(queuedItem.id);
+assertEqual(removedPor.por_id, "por-1", "removeItemPorContext returns the removed POR context");
+assertEqual(getItemPorContext(queuedItem.id), null, "removeItemPorContext clears the stored POR context");
+
 const queuedItemRow = db.prepare("SELECT queue_id FROM items WHERE id = ?").get(queuedItem.id);
-assertEqual(queuedItemRow.queue_id, "inbox", "queue-backed items inherit the default Inbox queue");
+assertEqual(queuedItemRow.queue_id, "custom-queue", "queue-backed items get their queue_id persisted");
+
 const porPayload = { kind: "por", id: "por-1" };
 db.prepare("UPDATE items SET por_json = ? WHERE id = ?").run(JSON.stringify(porPayload), queuedItem.id);
 const storedPor = db.prepare("SELECT por_json FROM items WHERE id = ?").get(queuedItem.id).por_json;
