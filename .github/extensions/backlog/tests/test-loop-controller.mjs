@@ -15,10 +15,12 @@ store.setItemGate({ itemId: item.id, gateKind: "start", state: "approved", actor
 
 const sent = [];
 const notices = [];
+const queueId = "loop-queue";
 const controller = createLoopController({
   session: { send: async (payload) => sent.push(payload) },
   store,
   featureId: "loop-feature",
+  queueId,
   sessionId: "loop-session",
   repoRoot: "C:\\repo",
   worktreePath: "C:\\repo\\worktree",
@@ -28,7 +30,10 @@ const controller = createLoopController({
 
 await controller.start();
 assertEqual(store.getLoopState("loop-feature").status, "running", "controller starts loop state");
+assertEqual(store.getLoopState(queueId).status, "running", "controller dispatches queue loop state");
 assertEqual(store.getLease("loop-feature").run_epoch, 1, "controller creates epoch lease");
+assertEqual(store.getLease(queueId).run_epoch, 1, "controller creates queue lease");
+assertEqual(store.getLease(queueId).item_id, item.id, "lease is scoped to the active item");
 
 const fired = await controller.onIdle();
 assertEqual(fired.fired, true, "idle fires one continuation");

@@ -14,10 +14,20 @@ addItem(liveSid, "live one");
 addItem(liveSid, "live two");
 addItem(orphanSid, "orphan one");
 const decision = addItem("test-snapshot-decision", "needs approval");
-db.prepare("INSERT INTO areas (id, name) VALUES (?, ?)").run("snapshot-area", "Snapshot Area");
-db.prepare("INSERT INTO features (id, area_id, title, status) VALUES (?, ?, ?, ?)").run("snapshot-feature", "snapshot-area", "Snapshot feature", "approved");
-const featureItem = addItem(liveSid, "feature-backed item", false, "snapshot-feature");
-db.prepare("UPDATE items SET feature_id = ?, status = ? WHERE id = ?").run("snapshot-feature", "proposed", decision.id);
+db.exec("CREATE TABLE IF NOT EXISTS queues (id TEXT PRIMARY KEY, name TEXT NOT NULL)");
+const itemColumns = db.prepare("PRAGMA table_info(items)").all();
+if (!itemColumns.some((column) => column.name === "queue_id")) {
+  db.exec("ALTER TABLE items ADD COLUMN queue_id TEXT");
+}
+const inboxQueueId = "inbox";
+const explicitQueueId = "snapshot-queue";
+db.prepare("INSERT OR REPLACE INTO queues (id, name) VALUES (?, ?)").run(inboxQueueId, "Inbox");
+db.prepare("INSERT OR REPLACE INTO queues (id, name) VALUES (?, ?)").run(explicitQueueId, "Snapshot Queue");
+const queueItem = addItem(liveSid, "queued item");
+const inboxItem = addItem(liveSid, "inbox item");
+db.prepare("UPDATE items SET queue_id = ? WHERE id = ?").run(explicitQueueId, queueItem.id);
+db.prepare("UPDATE items SET queue_id = ? WHERE id = ?").run(inboxQueueId, inboxItem.id);
+db.prepare("UPDATE items SET status = ? WHERE id = ?").run("proposed", decision.id);
 
 // Pretend liveSid is registered as a live peer. We don't need a real socket
 // for buildSnapshot — it only reads metadata fields. Use a sentinel object
@@ -37,20 +47,16 @@ assertEqual(snap.runtime.legacyStoragePresent, false, "snapshot includes legacy 
 assertEqual(snap.decisions.length, 1, "snapshot includes human decision notifications");
 assertEqual(snap.decisions[0].itemId, decision.id, "snapshot decision points at gated item");
 assertEqual(snap.sessions.length, 2, "snapshot has 2 sessions (1 live + 1 orphan)");
-assertEqual(snap.areas.length, 2, "snapshot groups work by area");
+assertEqual(Array.isArray(snap.queues), true, "snapshot exposes queue payloads");
 
-const featureArea = snap.areas.find((area) => area.id === "snapshot-area");
-assert(featureArea, "snapshot includes feature area");
-assertEqual(featureArea.name, "Snapshot Area", "feature area carries display name");
-assertEqual(featureArea.features.length, 1, "feature area has one feature");
-assertEqual(featureArea.features[0].id, "snapshot-feature", "feature grouping uses feature id");
-assertEqual(featureArea.features[0].title, "Snapshot feature", "feature grouping carries title");
-assertEqual(featureArea.features[0].items[0].id, featureItem.id, "feature grouping contains feature item");
+const inboxQueue = snap.queues.find((queue) => queue.id === inboxQueueId);
+assert(inboxQueue, "snapshot includes Inbox queue");
+assertEqual(inboxQueue.name, "Inbox", "snapshot preserves queue display name");
+assertEqual(inboxQueue.items[0].id, inboxItem.id, "inbox queue contains assigned items");
 
-const inboxArea = snap.areas.find((area) => area.id === "inbox");
-assert(inboxArea, "snapshot includes inbox area for unassigned items");
-assertEqual(inboxArea.features[0].id, "inbox", "inbox area contains inbox feature bucket");
-assertEqual(inboxArea.features[0].items.length, 3, "inbox bucket contains unassigned pending items");
+const explicitQueue = snap.queues.find((queue) => queue.id === explicitQueueId);
+assert(explicitQueue, "snapshot includes explicit queue");
+assertEqual(explicitQueue.items[0].id, queueItem.id, "snapshot includes explicit queue items");
 
 const live = snap.sessions.find(s => s.id === liveSid);
 const orphan = snap.sessions.find(s => s.id === orphanSid);

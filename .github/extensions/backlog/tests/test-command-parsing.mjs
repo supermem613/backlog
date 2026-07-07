@@ -3,6 +3,7 @@ import { assert, assertEqual, done } from "./harness.mjs";
 import { join } from "node:path";
 import { db } from "../db.mjs";
 import { parseBacklogCommand, handleBacklogCommand } from "../commands.mjs";
+import { addItem } from "../items.mjs";
 import { sandboxDir } from "./harness.mjs";
 
 // Parser
@@ -31,6 +32,14 @@ assert(/hello world/.test(listOut), `list shows added item, got: ${listOut}`);
 const firstId = addOut.match(/\[id: ([^\]]+)\]/)?.[1];
 const editOut = await handleBacklogCommand(sid, `edit ${firstId} hello edited`);
 assert(/Updated 'hello edited'/.test(editOut), `edit command updates item, got: ${editOut}`);
+
+const queueCreateOut = await handleBacklogCommand(sid, "queue create inbox");
+assert(/Created queue/.test(queueCreateOut), `queue create command creates an explicit queue, got: ${queueCreateOut}`);
+const queueTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'queues'").get();
+assert(queueTable, "queue table exists for queue-backed backlog items");
+const queuedItem = addItem(sid, "queue default");
+const queuedItemRow = db.prepare("SELECT queue_id FROM items WHERE id = ?").get(queuedItem.id);
+assertEqual(queuedItemRow.queue_id, "inbox", "new items default to the Inbox queue");
 
 db.prepare("INSERT INTO areas (id, name) VALUES (?, ?)").run("cmd-area", "Command Area");
 db.prepare("INSERT INTO features (id, area_id, title, status) VALUES (?, ?, ?, ?)").run("cmd-feature", "cmd-area", "Command feature", "approved");

@@ -7,11 +7,24 @@ import { addItem } from "../items.mjs";
 import { exportBacklogBackup, restoreBacklogBackup } from "../backup.mjs";
 import { createStore } from "../store.mjs";
 
-db.prepare("INSERT INTO areas (id, name) VALUES (?, ?)").run("backup-area", "Backup Area");
-db.prepare("INSERT INTO features (id, area_id, title, status) VALUES (?, ?, ?, ?)").run("backup-feature", "backup-area", "Backup feature", "approved");
+// Backup/restore should preserve queue and item tables.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS queues (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+const itemColumns = db.prepare("PRAGMA table_info(items)").all();
+if (!itemColumns.some((column) => column.name === "queue_id")) {
+  db.exec("ALTER TABLE items ADD COLUMN queue_id TEXT");
+}
+const queueId = "backup-queue";
+db.prepare("INSERT OR REPLACE INTO queues (id, name) VALUES (?, ?)").run(queueId, "Backup Queue");
 const item = addItem("backup-session", "persist through restore");
-db.prepare("UPDATE items SET feature_id = ?, status = ? WHERE id = ?").run("backup-feature", "approved", item.id);
-createStore().setItemGate({ itemId: item.id, gateKind: "start", state: "approved", binding: { reason: "backup test" }, actor: "test" });
+db.prepare("UPDATE items SET queue_id = ? WHERE id = ?").run(queueId, item.id);
+const store = createStore();
+store.setItemGate({ itemId: item.id, gateKind: "start", state: "approved", binding: { reason: "backup test" }, actor: "test" });
 
 const backupPath = join(sandboxDir, "explicit-backup.json");
 const exported = exportBacklogBackup({ outputPath: backupPath });
@@ -20,10 +33,13 @@ assert(exported.sha256.length === 64, "backup reports sha256 checksum");
 assertEqual(JSON.parse(readFileSync(backupPath, "utf8")).manifest.sha256, exported.sha256, "backup file includes matching manifest checksum");
 
 db.prepare("UPDATE items SET description = ?, status = ? WHERE id = ?").run("mutated", "blocked", item.id);
+db.prepare("DELETE FROM queues WHERE id = ?").run(queueId);
 db.prepare("DELETE FROM item_gates WHERE item_id = ?").run(item.id);
 
 const restored = restoreBacklogBackup({ inputPath: backupPath });
-assertEqual(restored.restoredTables.includes("items"), true, "restore reports restored items table");
+assertEqual(restored.restoredTables.includes("queues"), true, "restore reports restored queues table");
+assertEqual(db.prepare("SELECT name FROM queues WHERE id = ?").get(queueId).name, "Backup Queue", "restore brings back queue rows");
+assertEqual(db.prepare("SELECT queue_id FROM items WHERE id = ?").get(item.id).queue_id, queueId, "restore brings back item queue_id");
 assertEqual(db.prepare("SELECT description FROM items WHERE id = ?").get(item.id).description, "persist through restore", "restore brings back item description");
 assertEqual(db.prepare("SELECT status FROM items WHERE id = ?").get(item.id).status, "approved", "restore brings back item status");
 assertEqual(db.prepare("SELECT state FROM item_gates WHERE item_id = ? AND gate_kind = ?").get(item.id, "start").state, "approved", "restore brings back gate state");
@@ -31,7 +47,9 @@ assert(db.prepare("SELECT COUNT(*) AS count FROM events WHERE kind = ?").get("it
 
 const tamperedPath = join(sandboxDir, "tampered-backup.json");
 const tampered = JSON.parse(readFileSync(backupPath, "utf8"));
-tampered.tables.items[0].description = "tampered";
+if (Array.isArray(tampered.tables.queues) && tampered.tables.queues.length > 0) {
+  tampered.tables.queues[0].name = "tampered";
+}
 writeFileSync(tamperedPath, JSON.stringify(tampered, null, 2), "utf8");
 let rejected = false;
 try {

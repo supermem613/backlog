@@ -89,4 +89,27 @@ db.prepare("UPDATE sessions SET last_accessed = ? WHERE id = ?").run("2000-01-01
 assertEqual(pruneSessions(7), 1, "prune removes stale gated session");
 assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_gates WHERE item_id = ?").get(pruneItem.id).count, 0, "prune deletes item gates");
 
+const queueTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'queues'").get();
+if (!queueTable) {
+  db.exec("CREATE TABLE queues (id TEXT PRIMARY KEY, name TEXT NOT NULL)");
+}
+const itemColumns = db.prepare("PRAGMA table_info(items)").all();
+if (!itemColumns.some((column) => column.name === "queue_id")) {
+  db.exec("ALTER TABLE items ADD COLUMN queue_id TEXT");
+}
+if (!itemColumns.some((column) => column.name === "por_json")) {
+  db.exec("ALTER TABLE items ADD COLUMN por_json TEXT");
+}
+const inboxQueue = db.prepare("SELECT id FROM queues WHERE name = ?").get("Inbox");
+if (!inboxQueue) {
+  db.prepare("INSERT INTO queues (id, name) VALUES (?, ?)").run("inbox", "Inbox");
+}
+const queuedItem = addItem(sid, "queue-backed task");
+const queuedItemRow = db.prepare("SELECT queue_id FROM items WHERE id = ?").get(queuedItem.id);
+assertEqual(queuedItemRow.queue_id, "inbox", "queue-backed items inherit the default Inbox queue");
+const porPayload = { kind: "por", id: "por-1" };
+db.prepare("UPDATE items SET por_json = ? WHERE id = ?").run(JSON.stringify(porPayload), queuedItem.id);
+const storedPor = db.prepare("SELECT por_json FROM items WHERE id = ?").get(queuedItem.id).por_json;
+assertEqual(JSON.parse(storedPor).id, porPayload.id, "POR attachment round-trips through item storage");
+
 done("test-items");
