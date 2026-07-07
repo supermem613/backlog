@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Copilot CLI Extension: Backlog
- * A per-session task queue with deterministic slash commands, tools, and sidecar control.
+ * A per-session item queue with deterministic slash commands, tools, and sidecar control.
  * Storage: ~/.backlog/backlog.db (node:sqlite — zero deps, bundled with Node 24)
  *
  * Module layout:
@@ -43,7 +43,11 @@ import {
   makeSessionEndBanner,
 } from "./prompt.mjs";
 import { handleBacklogCommand } from "./commands.mjs";
-import { initFrictionCapture } from "./friction.mjs";
+import { createLoopRuntime } from "./loop-runtime.mjs";
+import {
+  assertDeprivilegedJoinConfig,
+  createBacklogJoinConfig,
+} from "./join-config.mjs";
 
 // initBacklog() must run before any module touches `db`. db.mjs uses
 // `export let db = null` — once we wire in the real handle here, every
@@ -51,6 +55,7 @@ import { initFrictionCapture } from "./friction.mjs";
 initBacklog();
 
 let activeSessionId = null;
+let loopRuntime = null;
 
 function setActiveSession(id) {
   if (!id) return null;
@@ -70,109 +75,34 @@ function logPendingOnEnd() {
   session.log(makeSessionEndBanner(count, items), { level: "warn" });
 }
 
-const session = await joinSession({
-  commands: [
-    {
-      name: "backlog",
-      description: "Manage session task backlog: add, list, done, remove, top, up, down, next, pending, sessions, prune, clear, show, doctor",
-      handler: (context) => {
-        const sid = activeSessionId || "default";
-        const rawText = context.args || "list";
-        const result = handleBacklogCommand(sid, rawText);
-        session.log(result);
-      },
-    },
-  ],
+const joinConfig = createBacklogJoinConfig({
+  getActiveSessionId: () => activeSessionId,
+  log: (message, options) => session.log(message, options),
+  syncSidecarVisibility,
+  ensureSession,
+  getDb: () => db,
+  getTopItem,
+  getPendingCount,
+  addItem,
+  markDone,
+  removeItem,
+  handleBacklogCommand: (sid, rawText) => handleBacklogCommand(sid, rawText, { loopRuntime }),
+});
+assertDeprivilegedJoinConfig(joinConfig);
 
-  tools: [
-    {
-      name: "backlog_next",
-      description: "Get the next pending backlog item. Call this after completing a task to check for more work.",
-      parameters: { type: "object", properties: {} },
-      handler: async (_args, invocation) => {
-        const sid = invocation?.sessionId || activeSessionId || "default";
-        const item = getTopItem(sid);
-        if (!item) {
-          syncSidecarVisibility(sid);
-          return "Backlog is empty — no pending items.";
-        }
-        const count = getPendingCount(sid);
-        return JSON.stringify({ next: item.description, id: item.id, totalPending: count });
-      },
-    },
-    {
-      name: "backlog_list",
-      description: "List all pending backlog items for the current session.",
-      parameters: { type: "object", properties: {} },
-      handler: async (_args, invocation) => {
-        const sid = invocation?.sessionId || activeSessionId || "default";
-        ensureSession(sid);
-        syncSidecarVisibility(sid);
-        const items = db.prepare(
-          "SELECT id, description, position FROM items WHERE session_id = ? AND status = ? ORDER BY position"
-        ).all(sid, "pending");
-        if (items.length === 0) return "Backlog is empty";
-        return items.map((i) => `#${i.position} [${i.id}] ${i.description}`).join("\n");
-      },
-    },
-    {
-      name: "backlog_add",
-      description: "Add an item to the session backlog.",
-      parameters: {
-        type: "object",
-        properties: {
-          description: { type: "string", description: "Task description" },
-          top: { type: "boolean", description: "Add as top priority" },
-        },
-        required: ["description"],
-      },
-      handler: async (args, invocation) => {
-        const sid = invocation?.sessionId || activeSessionId || "default";
-        const { id, position } = addItem(sid, args.description, args.top || false);
-        return `Added: '${args.description}' [id: ${id}] (position ${position})`;
-      },
-    },
-    {
-      name: "backlog_done",
-      description: "Mark a backlog item as done by ID or position number.",
-      parameters: {
-        type: "object",
-        properties: {
-          ref: { type: "string", description: "Item ID or position number" },
-        },
-        required: ["ref"],
-      },
-      handler: async (args, invocation) => {
-        const sid = invocation?.sessionId || activeSessionId || "default";
-        const item = markDone(sid, args.ref);
-        if (!item) return `Error: Item '${args.ref}' not found`;
-        return `Marked '${item.description}' as done`;
-      },
-    },
-    {
-      name: "backlog_remove",
-      description: "Remove a backlog item without completing it.",
-      parameters: {
-        type: "object",
-        properties: {
-          ref: { type: "string", description: "Item ID or position number" },
-        },
-        required: ["ref"],
-      },
-      handler: async (args, invocation) => {
-        const sid = invocation?.sessionId || activeSessionId || "default";
-        const item = removeItem(sid, args.ref);
-        if (!item) return `Error: Item '${args.ref}' not found`;
-        return `Removed '${item.description}'`;
-      },
-    },
-  ],
+const session = await joinSession(joinConfig);
+loopRuntime = createLoopRuntime({
+  session,
+  getSessionId: () => activeSessionId,
+  repoRoot: process.cwd(),
+  worktreePath: process.cwd(),
+  log: (message, options) => session.log(message, options),
+  notify: (message) => session.log(message, { level: "warn" }),
 });
 
 // session is now available — wire it into sidecar so /api/engage can call session.send.
 setSessionRef(session);
 setActiveSession(session.sessionId || session.id);
-initFrictionCapture(session, () => activeSessionId);
 // Seed a label from cwd if we don't already have one — covers extension
 // reloads where session.start has long since fired and won't replay.
 if (activeSessionId && !getSessionLabel(activeSessionId)) {
@@ -232,17 +162,19 @@ session.on("session.title_changed", (ev) => {
 // burndown auto-advance fires the next item only when the agent is truly
 // idle. session.idle fires after every turn the agent finishes (including
 // turns we kicked off via session.send for a burndown auto-advance).
-session.on("assistant.message", (event) => {
+session.on("assistant.message", async (event) => {
   if (event.agentId) return;
   const sid = activeSessionId;
   if (!sid) return;
   setSessionState(sid, "busy");
+  await loopRuntime?.onAssistantMessage(event);
 });
 
-session.on("session.idle", () => {
+session.on("session.idle", async () => {
   const sid = activeSessionId;
   if (!sid) return;
   setSessionState(sid, "idle");
+  await loopRuntime?.onIdle();
 });
 
 session.on?.("session.end", () => {

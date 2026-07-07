@@ -7,13 +7,33 @@
 // All exports use ESM `export let` so the live binding mechanic lets every
 // other module see the singleton `db` once initBacklog has been called.
 
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 
 export let BACKLOG_DIR = null;
 export let db = null;
+
+const FRICTION_COLUMNS = [
+  "source",
+  "friction_category",
+  "friction_tool",
+  "friction_key",
+  "occurrence_count",
+  "first_seen_at",
+  "last_seen_at",
+];
+
+function parseMetadataJson(value) {
+  if (!value) return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
 
 export function initBacklog(dirOverride) {
   if (db) return db;
@@ -25,6 +45,7 @@ export function initBacklog(dirOverride) {
 
   // WAL allows concurrent readers/writers across processes — required because
   // each Copilot session spawns its own extension process, and all share this DB.
+  db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA busy_timeout = 5000;");
 
@@ -39,6 +60,9 @@ export function initBacklog(dirOverride) {
       session_id TEXT NOT NULL,
       description TEXT NOT NULL,
       position INTEGER NOT NULL,
+      priority INTEGER DEFAULT 0,
+      queue_id TEXT,
+      por_json TEXT,
       status TEXT DEFAULT 'pending',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -51,39 +75,18 @@ export function initBacklog(dirOverride) {
       value TEXT NOT NULL,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE TABLE IF NOT EXISTS item_contexts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      item_id TEXT NOT NULL,
-      context_json TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
-    );
   `);
 
   // Idempotent migration: add label column if it doesn't already exist.
   // node:sqlite has no IF NOT EXISTS for ADD COLUMN, so try/catch the duplicate.
   try { db.exec("ALTER TABLE sessions ADD COLUMN label TEXT;"); }
   catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN source TEXT DEFAULT 'manual';"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN friction_category TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN friction_tool TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN friction_key TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN occurrence_count INTEGER DEFAULT 1;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN first_seen_at TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  try { db.exec("ALTER TABLE items ADD COLUMN last_seen_at TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
-  migrateItemContextsCascade();
-  db.exec("CREATE INDEX IF NOT EXISTS idx_item_contexts_item ON item_contexts(item_id, created_at);");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_friction_dedupe ON items(session_id, status, friction_key);");
-  db.prepare(
-    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
-  ).run("friction_capture_enabled", "1");
+  migrateRemoveFrictionStorage();
+  addColumnIfMissing("items", "priority", "INTEGER DEFAULT 0");
+  addColumnIfMissing("items", "queue_id", "TEXT");
+  addColumnIfMissing("items", "por_json", "TEXT");
+  ensureEventSchema();
+  ensureQueueSchema();
   // Note: a legacy `pinned` column may exist on older installs. We never read
   // or write it — pinning was removed; the viewer is dismissed by closing the
   // window, and re-opens automatically when new items are added or
@@ -92,7 +95,13 @@ export function initBacklog(dirOverride) {
   return db;
 }
 
+function addColumnIfMissing(tableName, columnName, definition) {
+  if (db.prepare(`PRAGMA table_info(${tableName})`).all().some((row) => row.name === columnName)) return;
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition};`);
+}
+
 export function itemContextCascadeEnabled() {
+  if (!tableExists("item_contexts")) return false;
   const rows = db.prepare("PRAGMA foreign_key_list(item_contexts)").all();
   return rows.some((row) =>
     row.table === "items" &&
@@ -102,33 +111,255 @@ export function itemContextCascadeEnabled() {
   );
 }
 
-function migrateItemContextsCascade() {
-  if (itemContextCascadeEnabled()) return;
-  try {
-    db.exec("PRAGMA foreign_keys = OFF;");
-    db.exec("BEGIN IMMEDIATE;");
-    db.exec(`
-      CREATE TABLE item_contexts_next (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_id TEXT NOT NULL,
-        context_json TEXT NOT NULL,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
-      );
-      INSERT INTO item_contexts_next (id, item_id, context_json, created_at)
-      SELECT c.id, c.item_id, c.context_json, c.created_at
-      FROM item_contexts c
-      JOIN items i ON i.id = c.item_id;
-      DROP TABLE item_contexts;
-      ALTER TABLE item_contexts_next RENAME TO item_contexts;
-    `);
-    db.exec("COMMIT;");
-  } catch (e) {
-    try { db.exec("ROLLBACK;"); } catch {}
-    throw e;
-  } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
+export function tableExists(name) {
+  return !!db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?"
+  ).get(name);
+}
+
+export function itemColumns() {
+  return db.prepare("PRAGMA table_info(items)").all().map((row) => row.name);
+}
+
+export function frictionStoragePresent() {
+  const columns = new Set(itemColumns());
+  return FRICTION_COLUMNS.some((column) => columns.has(column)) || tableExists("item_contexts");
+}
+
+export const legacyStoragePresent = frictionStoragePresent;
+
+function readFrictionArchiveRows() {
+  const columns = new Set(itemColumns());
+  const hasSource = columns.has("source");
+  const frictionRows = hasSource
+    ? db.prepare("SELECT * FROM items WHERE source = ?").all("friction")
+    : [];
+  const contextRows = tableExists("item_contexts")
+    ? db.prepare("SELECT * FROM item_contexts ORDER BY id").all()
+    : [];
+  return { frictionRows, contextRows };
+}
+
+export function exportFrictionArchive(label = "migration") {
+  const archiveDir = join(BACKLOG_DIR, "archive");
+  mkdirSync(archiveDir, { recursive: true });
+  const { frictionRows, contextRows } = readFrictionArchiveRows();
+  const createdAt = new Date().toISOString();
+  const lines = [
+    JSON.stringify({ type: "meta", label, created_at: createdAt }),
+    ...frictionRows.map((row) => JSON.stringify({ type: "item", row })),
+    ...contextRows.map((row) => JSON.stringify({ type: "item_context", row })),
+  ];
+  const payload = `${lines.join("\n")}\n`;
+  const checksum = createHash("sha256").update(payload).digest("hex");
+  const stamp = createdAt.replace(/[:.]/g, "-");
+  const jsonlPath = join(archiveDir, `friction-removal-${stamp}.jsonl`);
+  const manifestPath = join(archiveDir, `friction-removal-${stamp}.manifest.json`);
+  writeFileSync(jsonlPath, payload, "utf8");
+  writeFileSync(manifestPath, JSON.stringify({
+    label,
+    created_at: createdAt,
+    jsonl_path: jsonlPath,
+    sha256: checksum,
+    friction_item_count: frictionRows.length,
+    item_context_count: contextRows.length,
+  }, null, 2), "utf8");
+  return { jsonlPath, manifestPath, checksum, frictionRows: frictionRows.length, contextRows: contextRows.length };
+}
+
+function migrateRemoveFrictionStorage() {
+  if (!frictionStoragePresent()) return null;
+  const archive = exportFrictionArchive("friction-removal");
+  db.exec("DROP INDEX IF EXISTS idx_friction_dedupe;");
+  db.exec("DROP INDEX IF EXISTS idx_item_contexts_item;");
+  db.exec("DROP TABLE IF EXISTS item_contexts;");
+  for (const column of FRICTION_COLUMNS) {
+    if (itemColumns().includes(column)) {
+      db.exec(`ALTER TABLE items DROP COLUMN ${column};`);
+    }
   }
+  db.prepare("DELETE FROM settings WHERE key = ?").run("friction_capture_enabled");
+  db.exec("PRAGMA user_version = 1;");
+  return archive;
+}
+
+function bumpUserVersionAtLeast(version) {
+  const current = db.prepare("PRAGMA user_version").get().user_version || 0;
+  if (current < version) db.exec(`PRAGMA user_version = ${version};`);
+}
+
+function ensureEventSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      actor TEXT NOT NULL,
+      scope_kind TEXT NOT NULL,
+      scope_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      correlation_id TEXT,
+      origin_host TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS item_gates (
+      item_id TEXT NOT NULL,
+      gate_kind TEXT NOT NULL CHECK (gate_kind IN ('start', 'review')),
+      state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'waived', 'rejected')),
+      binding_json TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (item_id, gate_kind),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE RESTRICT
+    );
+    CREATE TABLE IF NOT EXISTS item_waivers (
+      item_id TEXT NOT NULL,
+      gate_kind TEXT NOT NULL CHECK (gate_kind IN ('start', 'review', 'both')),
+      mode TEXT NOT NULL CHECK (mode IN ('sticky', 'time', 'count')),
+      expires_at TEXT,
+      remaining_uses INTEGER,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (item_id, gate_kind),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_events_scope ON events(scope_kind, scope_id, id DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_item_gates_open ON item_gates(item_id, gate_kind) WHERE state IN ('pending', 'approved', 'waived');
+    CREATE VIEW IF NOT EXISTS gates AS
+      SELECT 'item' AS target_kind, item_id AS target_id, gate_kind, state, binding_json, updated_at FROM item_gates;
+    CREATE VIEW IF NOT EXISTS waivers AS
+      SELECT 'item' AS scope_kind, item_id AS scope_id, gate_kind, mode, expires_at, remaining_uses, updated_at FROM item_waivers;
+  `);
+}
+
+function insertEventRow(event) {
+  const payload = event.payload === undefined ? {} : event.payload;
+  const result = db.prepare(`
+    INSERT INTO events (actor, scope_kind, scope_id, kind, payload, correlation_id, origin_host)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    event.actor || "backlog",
+    event.scopeKind,
+    event.scopeId,
+    event.kind,
+    JSON.stringify(payload),
+    event.correlationId || null,
+    event.originHost || hostname(),
+  );
+  return result.lastInsertRowid;
+}
+
+export function appendEvent(event) {
+  return insertEventRow(event);
+}
+
+export function writeWithEvent(mutator, event) {
+  return tx(() => {
+    const result = mutator(db);
+    const eventId = insertEventRow(event);
+    return { result, eventId };
+  });
+}
+
+export function setItemGate({ itemId, gateKind, state, binding = {}, actor = "backlog", correlationId = null }) {
+  return writeWithEvent((database) => {
+    database.prepare(`
+      INSERT INTO item_gates (item_id, gate_kind, state, binding_json, updated_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(item_id, gate_kind) DO UPDATE SET
+        state = excluded.state,
+        binding_json = excluded.binding_json,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(itemId, gateKind, state, JSON.stringify(binding));
+  }, {
+    actor,
+    scopeKind: "item",
+    scopeId: itemId,
+    kind: "item_gate_set",
+    payload: { gateKind, state, binding },
+    correlationId,
+  });
+}
+
+export function setItemWaiver({ itemId, gateKind, mode, expiresAt = null, remainingUses = null, actor = "backlog", correlationId = null }) {
+  return writeWithEvent((database) => {
+    database.prepare(`
+      INSERT INTO item_waivers (item_id, gate_kind, mode, expires_at, remaining_uses, updated_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(item_id, gate_kind) DO UPDATE SET
+        mode = excluded.mode,
+        expires_at = excluded.expires_at,
+        remaining_uses = excluded.remaining_uses,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(itemId, gateKind, mode, expiresAt, remainingUses);
+  }, {
+    actor,
+    scopeKind: "item",
+    scopeId: itemId,
+    kind: "item_waiver_set",
+    payload: { gateKind, mode, expiresAt, remainingUses },
+    correlationId,
+  });
+}
+
+function replayEvent(event) {
+  const payload = JSON.parse(event.payload || "{}");
+  if (event.kind === "item_gate_set") {
+    db.prepare(`
+      INSERT INTO item_gates (item_id, gate_kind, state, binding_json, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(item_id, gate_kind) DO UPDATE SET
+        state = excluded.state,
+        binding_json = excluded.binding_json,
+        updated_at = excluded.updated_at
+    `).run(event.scope_id, payload.gateKind, payload.state, JSON.stringify(payload.binding || {}), event.ts);
+  } else if (event.kind === "queue_loop_state_set") {
+    db.prepare(`
+      INSERT INTO queue_loop_state (queue_id, status, continuations_fired, in_flight, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(queue_id) DO UPDATE SET
+        status = excluded.status,
+        continuations_fired = excluded.continuations_fired,
+        in_flight = excluded.in_flight,
+        updated_at = excluded.updated_at
+    `).run(event.scope_id, payload.status, payload.continuationsFired || 0, payload.inFlight ? 1 : 0, event.ts);
+  } else if (event.kind === "item_lease_set") {
+    db.prepare(`
+      INSERT INTO item_leases (item_id, lease_id, owner_session, repo_root, worktree_path, heartbeat_at, expires_at, status, needs_recovery, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(item_id) DO UPDATE SET
+        lease_id = excluded.lease_id,
+        owner_session = excluded.owner_session,
+        repo_root = excluded.repo_root,
+        worktree_path = excluded.worktree_path,
+        heartbeat_at = excluded.heartbeat_at,
+        expires_at = excluded.expires_at,
+        status = excluded.status,
+        needs_recovery = excluded.needs_recovery,
+        updated_at = excluded.updated_at
+    `).run(event.scope_id, payload.leaseId, payload.ownerSession, payload.repoRoot, payload.worktreePath || null, payload.heartbeatAt, payload.expiresAt, payload.status || "active", payload.needsRecovery ? 1 : 0, event.ts);
+  } else if (event.kind === "item_waiver_set") {
+    db.prepare(`
+      INSERT INTO item_waivers (item_id, gate_kind, mode, expires_at, remaining_uses, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(item_id, gate_kind) DO UPDATE SET
+        mode = excluded.mode,
+        expires_at = excluded.expires_at,
+        remaining_uses = excluded.remaining_uses,
+        updated_at = excluded.updated_at
+    `).run(event.scope_id, payload.gateKind, payload.mode, payload.expiresAt || null, payload.remainingUses ?? null, event.ts);
+  }
+}
+
+export function rebuildProjectionsFromEvents() {
+  return tx(() => {
+    db.exec(`
+      DELETE FROM item_gates;
+      DELETE FROM item_waivers;
+      DELETE FROM item_leases;
+      DELETE FROM queue_loop_state;
+    `);
+    const events = db.prepare("SELECT * FROM events ORDER BY id").all();
+    for (const event of events) replayEvent(event);
+    return events.length;
+  });
 }
 
 // Run a function inside an immediate transaction so multi-statement
@@ -186,6 +417,24 @@ export function setSetting(key, value) {
   ).run(key, String(value));
 }
 
+export function deleteItemDependentsByIds(itemIds) {
+  if (!itemIds.length) return;
+  const placeholders = itemIds.map(() => "?").join(", ");
+  db.prepare(`DELETE FROM item_gates WHERE item_id IN (${placeholders})`).run(...itemIds);
+  db.prepare(`DELETE FROM item_waivers WHERE item_id IN (${placeholders})`).run(...itemIds);
+  db.prepare(`DELETE FROM item_pors WHERE item_id IN (${placeholders})`).run(...itemIds);
+  db.prepare(`DELETE FROM item_attachments WHERE item_id IN (${placeholders})`).run(...itemIds);
+  db.prepare(`DELETE FROM item_isolation_units WHERE item_id IN (${placeholders})`).run(...itemIds);
+  db.prepare(`DELETE FROM item_leases WHERE item_id IN (${placeholders})`).run(...itemIds);
+}
+
+export function deleteItemDependentsForSession(sessionId, queueId = null) {
+  const itemIds = queueId
+    ? db.prepare("SELECT id FROM items WHERE session_id = ? AND queue_id = ?").all(sessionId, queueId).map((row) => row.id)
+    : db.prepare("SELECT id FROM items WHERE session_id = ?").all(sessionId).map((row) => row.id);
+  deleteItemDependentsByIds(itemIds);
+}
+
 export function listSessions() {
   return db.prepare(`
     SELECT s.id, s.last_accessed,
@@ -195,15 +444,277 @@ export function listSessions() {
 }
 
 export function pruneSessions(days = 7) {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - days);
-  const stale = db.prepare("SELECT id FROM sessions WHERE last_accessed < ?").all(cutoff.toISOString());
-  for (const s of stale) {
-    db.prepare(
-      "DELETE FROM item_contexts WHERE item_id IN (SELECT id FROM items WHERE session_id = ?)"
-    ).run(s.id);
-    db.prepare("DELETE FROM items WHERE session_id = ?").run(s.id);
-    db.prepare("DELETE FROM sessions WHERE id = ?").run(s.id);
+  return tx(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const stale = db.prepare("SELECT id FROM sessions WHERE last_accessed < ?").all(cutoff.toISOString());
+    for (const s of stale) {
+      deleteItemDependentsForSession(s.id);
+      db.prepare("DELETE FROM items WHERE session_id = ?").run(s.id);
+      db.prepare("DELETE FROM sessions WHERE id = ?").run(s.id);
+    }
+    return stale.length;
+  });
+}
+
+function queueRowToObject(row) {
+  return {
+    ...row,
+    metadata: row.metadata_json ? parseMetadataJson(row.metadata_json) : {},
+  };
+}
+
+export function createQueue({ id, name, description = null, metadata = {} } = {}) {
+  const queueId = id || `queue-${Date.now()}`;
+  const existing = getQueue(queueId);
+  if (existing) return existing;
+  db.prepare(`
+    INSERT INTO queues (id, name, description, metadata_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(queueId, name || queueId, description, JSON.stringify(metadata || {}));
+  return getQueue(queueId);
+}
+
+export function ensureQueue(queueId, { name = null, description = null, metadata = undefined } = {}) {
+  if (!queueId) queueId = "inbox";
+  const existing = getQueue(queueId);
+  if (existing) {
+    if (name !== null || description !== null || metadata !== undefined) {
+      updateQueue(queueId, { name, description, metadata });
+    }
+    return existing;
   }
-  return stale.length;
+  return createQueue({ id: queueId, name: name || queueId, description, metadata: metadata ?? {} });
+}
+
+export function getQueue(queueId) {
+  if (!queueId) return null;
+  const row = db.prepare("SELECT * FROM queues WHERE id = ?").get(queueId);
+  return row ? queueRowToObject(row) : null;
+}
+
+export function listQueues() {
+  return db.prepare("SELECT * FROM queues ORDER BY name, created_at").all().map(queueRowToObject);
+}
+
+export function updateQueue(queueId, { name = undefined, description = undefined, metadata = undefined } = {}) {
+  const updates = [];
+  const params = [];
+  if (name !== undefined) {
+    updates.push("name = ?");
+    params.push(name);
+  }
+  if (description !== undefined) {
+    updates.push("description = ?");
+    params.push(description);
+  }
+  if (metadata !== undefined) {
+    updates.push("metadata_json = ?");
+    params.push(JSON.stringify(metadata || {}));
+  }
+  if (!updates.length) return getQueue(queueId);
+  updates.push("updated_at = CURRENT_TIMESTAMP");
+  params.push(queueId);
+  db.prepare(`UPDATE queues SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+  return getQueue(queueId);
+}
+
+export function ensureDefaultInboxQueue() {
+  return ensureQueue("inbox", { name: "Inbox", description: "Default backlog queue", metadata: { kind: "inbox" } });
+}
+
+function ensureQueueSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS queues (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS item_pors (
+      item_id TEXT PRIMARY KEY,
+      por_id TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'por',
+      meta_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS item_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('path', 'note')),
+      ref TEXT NOT NULL,
+      meta_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS item_isolation_units (
+      item_id TEXT PRIMARY KEY,
+      repo_root TEXT NOT NULL,
+      path TEXT NOT NULL,
+      provider TEXT NOT NULL CHECK (provider IN ('soda', 'git')),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS item_leases (
+      item_id TEXT PRIMARY KEY,
+      lease_id TEXT NOT NULL,
+      owner_session TEXT NOT NULL,
+      repo_root TEXT NOT NULL,
+      worktree_path TEXT,
+      heartbeat_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      needs_recovery INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS queue_loop_state (
+      queue_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      continuations_fired INTEGER NOT NULL DEFAULT 0,
+      in_flight INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (queue_id) REFERENCES queues(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_items_queue_status_position ON items(queue_id, status, position);
+    CREATE INDEX IF NOT EXISTS idx_item_pors_item ON item_pors(item_id);
+    CREATE INDEX IF NOT EXISTS idx_item_attachments_item ON item_attachments(item_id);
+    CREATE INDEX IF NOT EXISTS idx_item_isolation_units_item ON item_isolation_units(item_id);
+    CREATE INDEX IF NOT EXISTS idx_item_leases_item ON item_leases(item_id);
+  `);
+  addColumnIfMissing("queues", "description", "TEXT");
+  addColumnIfMissing("queues", "metadata_json", "TEXT DEFAULT '{}'" );
+  addColumnIfMissing("items", "queue_id", "TEXT");
+  addColumnIfMissing("items", "por_json", "TEXT");
+  ensureDefaultInboxQueue();
+  backfillItemQueues();
+  bumpUserVersionAtLeast(3);
+}
+
+function backfillItemQueues() {
+  const hasLegacyFeatureColumn = itemColumns().includes("feature_id");
+  const rows = hasLegacyFeatureColumn
+    ? db.prepare("SELECT id, feature_id FROM items WHERE queue_id IS NULL OR queue_id = ''").all()
+    : db.prepare("SELECT id, NULL AS feature_id FROM items WHERE queue_id IS NULL OR queue_id = ''").all();
+  for (const row of rows) {
+    const queueId = row.feature_id ? `feature-${row.feature_id}` : "inbox";
+    ensureQueue(queueId, {
+      name: row.feature_id ? `Feature ${row.feature_id}` : "Inbox",
+      description: row.feature_id ? `Compatibility queue for ${row.feature_id}` : "Default backlog queue",
+      metadata: row.feature_id ? { source: "feature-link" } : { kind: "inbox" },
+    });
+    db.prepare("UPDATE items SET queue_id = ? WHERE id = ?").run(queueId, row.id);
+  }
+}
+
+export function attachItemPorContext(input, maybeMetadata = {}) {
+  let itemId;
+  let porId = null;
+  let kind = "por";
+  let metadata = {};
+  if (typeof input === "object" && input !== null) {
+    itemId = input.itemId ?? input.item_id ?? input.id;
+    porId = input.porId ?? input.por_id ?? input.ref ?? null;
+    kind = input.kind ?? "por";
+    metadata = input.metadata ?? {};
+  } else {
+    itemId = input;
+    if (typeof maybeMetadata === "string") {
+      porId = maybeMetadata;
+    } else {
+      porId = maybeMetadata.porId ?? maybeMetadata.por_id ?? maybeMetadata.ref ?? null;
+      kind = maybeMetadata.kind ?? "por";
+      metadata = maybeMetadata.metadata ?? maybeMetadata ?? {};
+    }
+  }
+  if (!itemId) return null;
+  const resolvedPorId = porId || `por-${itemId}`;
+  db.prepare(`
+    INSERT INTO item_pors (item_id, por_id, kind, meta_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(item_id) DO UPDATE SET
+      por_id = excluded.por_id,
+      kind = excluded.kind,
+      meta_json = excluded.meta_json,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(itemId, resolvedPorId, kind, JSON.stringify(metadata || {}));
+  return getItemPorContext(itemId);
+}
+
+export function getItemPorContext(itemId) {
+  if (!itemId) return null;
+  const row = db.prepare("SELECT * FROM item_pors WHERE item_id = ?").get(itemId);
+  if (!row) return null;
+  return {
+    ...row,
+    metadata: row.meta_json ? parseMetadataJson(row.meta_json) : {},
+  };
+}
+
+export function removeItemPorContext(itemId) {
+  if (!itemId) return null;
+  const context = getItemPorContext(itemId);
+  db.prepare("DELETE FROM item_pors WHERE item_id = ?").run(itemId);
+  return context;
+}
+
+export function setQueueLoopState({ queueId, status, continuationsFired = 0, inFlight = false, actor = "backlog", correlationId = null }) {
+  return writeWithEvent((database) => {
+    database.prepare(`
+      INSERT INTO queue_loop_state (queue_id, status, continuations_fired, in_flight, updated_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(queue_id) DO UPDATE SET
+        status = excluded.status,
+        continuations_fired = excluded.continuations_fired,
+        in_flight = excluded.in_flight,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(queueId, status, continuationsFired, inFlight ? 1 : 0);
+  }, {
+    actor,
+    scopeKind: "queue",
+    scopeId: queueId,
+    kind: "queue_loop_state_set",
+    payload: { status, continuationsFired, inFlight: !!inFlight },
+    correlationId,
+  });
+}
+
+export function getQueueLoopState(queueId) {
+  const row = db.prepare("SELECT * FROM queue_loop_state WHERE queue_id = ?").get(queueId);
+  return row || null;
+}
+
+export function setItemLease({ itemId, leaseId, ownerSession, repoRoot, worktreePath = null, heartbeatAt, expiresAt, status = "active", needsRecovery = false, actor = "backlog", correlationId = null }) {
+  return writeWithEvent((database) => {
+    database.prepare(`
+      INSERT INTO item_leases (item_id, lease_id, owner_session, repo_root, worktree_path, heartbeat_at, expires_at, status, needs_recovery, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(item_id) DO UPDATE SET
+        lease_id = excluded.lease_id,
+        owner_session = excluded.owner_session,
+        repo_root = excluded.repo_root,
+        worktree_path = excluded.worktree_path,
+        heartbeat_at = excluded.heartbeat_at,
+        expires_at = excluded.expires_at,
+        status = excluded.status,
+        needs_recovery = excluded.needs_recovery,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(itemId, leaseId, ownerSession, repoRoot, worktreePath, heartbeatAt, expiresAt, status, needsRecovery ? 1 : 0);
+  }, {
+    actor,
+    scopeKind: "item",
+    scopeId: itemId,
+    kind: "item_lease_set",
+    payload: { leaseId, ownerSession, repoRoot, worktreePath, heartbeatAt, expiresAt, status, needsRecovery: !!needsRecovery },
+    correlationId,
+  });
+}
+
+export function getItemLease(itemId) {
+  const row = db.prepare("SELECT * FROM item_leases WHERE item_id = ?").get(itemId);
+  return row || null;
 }

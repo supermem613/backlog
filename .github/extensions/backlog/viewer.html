@@ -45,7 +45,7 @@
   /* ---------- Layout ---------- */
   .app {
     display: grid;
-    grid-template-columns: 168px 1fr;
+    grid-template-columns: 220px 1fr;
     grid-template-rows: 42px 1fr;
     height: 100vh;
   }
@@ -104,18 +104,6 @@
   }
   .topbar .burndown.on:hover { background: #8fb8ff; border-color: #8fb8ff; }
   .topbar .burndown:disabled { opacity: 0.35; cursor: not-allowed; background: transparent; color: var(--muted); border-color: var(--border-soft); }
-  .topbar .friction-toggle {
-    background: transparent; border: 1px solid var(--border-soft);
-    color: var(--text-soft); border-radius: 4px;
-    padding: 3px 9px; font-size: 11px; line-height: 1;
-    display: inline-flex; align-items: center; gap: 5px;
-    transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
-  }
-  .topbar .friction-toggle:hover { background: #2a2d34; color: var(--text); border-color: var(--accent); }
-  .topbar .friction-toggle.on {
-    background: var(--warn); color: #0e0f12; border-color: var(--warn);
-  }
-
   /* ---------- Sidebar ---------- */
   .rail {
     background: var(--bg-rail);
@@ -168,6 +156,30 @@
     flex-shrink: 0;
   }
   .chip.active .badge { background: var(--accent); color: #0e0f12; }
+  .queue-label {
+    margin: 10px 8px 4px;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .item-chip {
+    margin-left: 8px;
+  }
+  .item-chip .label small {
+    display: block;
+    margin-top: 1px;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 400;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   /* ---------- Main ---------- */
   .main {
@@ -238,9 +250,6 @@
   .card:hover { background: var(--bg-card-hov); border-color: var(--border-soft); }
   .card.top { background: var(--bg-top); border-color: var(--border-top); }
   .card.top:hover { background: var(--bg-top-hov); }
-  .card.friction { border-color: #6b4f1f; }
-  .card.friction.top { border-color: #8a651e; }
-
   .card .title-row {
     display: flex; align-items: flex-start; gap: 8px;
     cursor: pointer;
@@ -276,10 +285,12 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     flex: 1; min-width: 0;
   }
-  .card .meta .friction-chip {
-    background: #3a2a12; color: var(--warn);
-    padding: 1px 6px; border-radius: 8px;
-    font-weight: 600; font-size: 9px;
+  .card .session {
+    color: var(--text-soft);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 170px;
   }
   .card .context {
     margin-top: 6px;
@@ -363,7 +374,6 @@
         <span class="runtime" id="runtime" title="Runtime not loaded">runtime unknown</span>
         <span class="status" id="status"><span class="dot"></span>connecting…</span>
         <button type="button" class="burndown" id="burndown" title="Burndown mode: auto-engage the next item whenever one is marked done" aria-label="Toggle burndown" aria-pressed="false" disabled>🔥 Burndown</button>
-        <button type="button" class="friction-toggle" id="friction-toggle" title="Auto-promote Tier-1 hard failures into backlog" aria-label="Toggle friction capture" aria-pressed="true">⚠ Friction ON</button>
         <button type="button" class="refresh" id="refresh" title="Reload viewer (picks up viewer.html changes)" aria-label="Refresh">↻</button>
       </span>
     </div>
@@ -382,488 +392,373 @@
 
 <script>
 (() => {
-  const params = new URLSearchParams(location.search);
-  const TOKEN = params.get("token") || "";
+const params = new URLSearchParams(location.search);
+const TOKEN = params.get("token") || "";
 
-  const status = document.getElementById("status");
-  const runtimeEl = document.getElementById("runtime");
-  const rail   = document.getElementById("rail");
-  const list   = document.getElementById("list");
-  const toast  = document.getElementById("toast");
-  const addForm  = document.getElementById("add-form");
-  const addInput = document.getElementById("add-input");
-  const addBtn   = document.getElementById("add-btn");
-  const refreshBtn = document.getElementById("refresh");
-  const burndownBtn = document.getElementById("burndown");
-  const frictionBtn = document.getElementById("friction-toggle");
+const status = document.getElementById("status");
+const runtimeEl = document.getElementById("runtime");
+const rail = document.getElementById("rail");
+const list = document.getElementById("list");
+const toast = document.getElementById("toast");
+const addForm = document.getElementById("add-form");
+const addInput = document.getElementById("add-input");
+const addBtn = document.getElementById("add-btn");
+const refreshBtn = document.getElementById("refresh");
+const burndownBtn = document.getElementById("burndown");
 
-  refreshBtn.addEventListener("click", async () => {
-    try {
-      await fetch("/api/reload-viewer?token=" + encodeURIComponent(TOKEN), { method: "POST" });
-    } catch (e) { console.error("reload-viewer failed", e); }
-    intentionalClose = true;
-    location.reload();
+refreshBtn.addEventListener("click", async () => {
+  try {
+    await fetch("/api/reload-viewer?token=" + encodeURIComponent(TOKEN), { method: "POST" });
+  } catch (e) { console.error("reload-viewer failed", e); }
+  intentionalClose = true;
+  location.reload();
+});
+
+burndownBtn.addEventListener("click", async () => {
+  const session = (snapshot.sessions || []).find((entry) => entry.id === addSessionId);
+  if (!session || !session.live) return;
+  const next = !session.burndown;
+  try {
+    await api("/api/burndown", { sessionId: session.id, enabled: next });
+    showToast(next ? "burndown on — auto-engaging items" : "burndown off");
+  } catch (e) { console.error(e); showToast("burndown toggle failed", true); }
+});
+
+let intentionalClose = false;
+let snapshot = { sessions: [], queues: [], activeSessionId: null };
+let activeQueueId = null;
+let addSessionId = null;
+
+function setStatus(label, cls) {
+  status.className = "status " + (cls || "");
+  status.innerHTML = '<span class="dot"></span>' + label;
+}
+
+function renderRuntime() {
+  const runtime = snapshot.runtime || {};
+  const version = runtime.version || "unknown";
+  const commit = runtime.commit || "unknown";
+  const cascade = runtime.itemContextCascade === false ? "cascade missing" : "cascade ok";
+  runtimeEl.textContent = `v${version} · ${commit} · ${cascade}`;
+  runtimeEl.title = [
+    `Version: ${version}`,
+    `Commit: ${commit}`,
+    `Cascade: ${cascade}`,
+    `Extension: ${runtime.extensionPath || "unknown"}`,
+    `Package: ${runtime.packagePath || "unknown"}`,
+  ].join("\n");
+}
+
+function showToast(msg, bad) {
+  toast.textContent = msg;
+  toast.classList.toggle("bad", !!bad);
+  toast.classList.add("show");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.remove("show"), 1300);
+}
+
+function relAge(iso) {
+  if (!iso) return "";
+  const t = Date.parse(iso.replace(" ", "T") + (iso.endsWith("Z") ? "" : "Z"));
+  if (isNaN(t)) return "";
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, token: TOKEN }),
   });
-
-  burndownBtn.addEventListener("click", async () => {
-    const session = (snapshot.sessions || []).find(s => s.id === activeId);
-    if (!session || !session.live) return;
-    const next = !session.burndown;
-    try {
-      await api("/api/burndown", { sessionId: session.id, enabled: next });
-      showToast(next ? "burndown on — auto-engaging items" : "burndown off");
-    } catch (e) { console.error(e); showToast("burndown toggle failed", true); }
-  });
-
-  frictionBtn.addEventListener("click", async () => {
-    const next = !snapshot.frictionCaptureEnabled;
-    try {
-      const result = await api("/api/friction", { enabled: next });
-      snapshot.frictionCaptureEnabled = !!result.enabled;
-      renderFrictionToggle();
-      showToast(result.enabled ? "friction auto-promotion on" : "friction auto-promotion off");
-    } catch (e) { console.error(e); showToast("friction toggle failed", true); }
-  });
-
-  let intentionalClose = false;
-  let snapshot = { sessions: [], activeSessionId: null };
-  let activeId = null; // user's chosen partition; sticky across snapshots
-
-  function setStatus(label, cls) {
-    status.className = "status " + (cls || "");
-    status.innerHTML = '<span class="dot"></span>' + label;
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error("HTTP " + res.status + (text ? ": " + text : ""));
   }
-  function renderRuntime() {
-    const runtime = snapshot.runtime || {};
-    const version = runtime.version || "unknown";
-    const commit = runtime.commit || "unknown";
-    const cascade = runtime.itemContextCascade === false ? "cascade missing" : "cascade ok";
-    runtimeEl.textContent = `v${version} · ${commit} · ${cascade}`;
-    runtimeEl.title = [
-      `Version: ${version}`,
-      `Commit: ${commit}`,
-      `Cascade: ${cascade}`,
-      `Extension: ${runtime.extensionPath || "unknown"}`,
-      `Package: ${runtime.packagePath || "unknown"}`,
-    ].join("\n");
-  }
-  function showToast(msg, bad) {
-    toast.textContent = msg;
-    toast.classList.toggle("bad", !!bad);
-    toast.classList.add("show");
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => toast.classList.remove("show"), 1300);
-  }
-  function relAge(iso) {
-    if (!iso) return "";
-    const t = Date.parse(iso.replace(" ", "T") + (iso.endsWith("Z") ? "" : "Z"));
-    if (isNaN(t)) return "";
-    const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
-    if (s < 60)    return s + "s ago";
-    if (s < 3600)  return Math.floor(s / 60) + "m ago";
-    if (s < 86400) return Math.floor(s / 3600) + "h ago";
-    return Math.floor(s / 86400) + "d ago";
-  }
+  return res.json().catch(() => ({}));
+}
 
-  async function api(path, body) {
-    const res = await fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, token: TOKEN }),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error("HTTP " + res.status + (text ? ": " + text : ""));
-    }
-    return res.json().catch(() => ({}));
-  }
+function autoGrow(el) {
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, parseFloat(getComputedStyle(el).maxHeight)) + "px";
+}
 
-  // Auto-grow a <textarea> from 1 to maxLines lines based on content.
-  // Resets to single-line when empty so the row doesn't stay tall.
-  function autoGrow(el) {
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, parseFloat(getComputedStyle(el).maxHeight)) + "px";
-  }
+function getSelectedQueue() {
+  return (snapshot.queues || []).find((queue) => queue.id === activeQueueId) || (snapshot.queues || [])[0] || null;
+}
 
-  // --- Add ---
-  addInput.addEventListener("input", () => {
-    addBtn.disabled = !activeId || addInput.value.trim().length === 0;
+function getAddSession() {
+  const sessions = snapshot.sessions || [];
+  if (addSessionId && sessions.some((session) => session.id === addSessionId && session.live)) {
+    return sessions.find((session) => session.id === addSessionId);
+  }
+  const selectedQueue = getSelectedQueue();
+  const liveItemSessionId = selectedQueue?.items.find((item) => item.session_live)?.session_id;
+  const target = liveItemSessionId
+    ? sessions.find((session) => session.id === liveItemSessionId)
+    : sessions.find((session) => session.id === snapshot.activeSessionId && session.live) || sessions.find((session) => session.live);
+  addSessionId = target?.id || null;
+  return target || null;
+}
+
+addInput.addEventListener("input", () => {
+  addBtn.disabled = !getAddSession() || addInput.value.trim().length === 0;
+  autoGrow(addInput);
+});
+
+addInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (!addBtn.disabled) addForm.requestSubmit();
+  }
+});
+
+addForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const desc = addInput.value.trim();
+  const addSession = getAddSession();
+  const selectedQueue = getSelectedQueue();
+  if (!desc || !addSession || !selectedQueue) return;
+  addBtn.disabled = true; addInput.disabled = true;
+  try {
+    await api("/api/mutate", { op: "add", sessionId: addSession.id, description: desc, queueId: selectedQueue.id });
+    addInput.value = "";
+    showToast("added");
+  } catch (e) {
+    console.error(e); showToast("add failed", true);
+  } finally {
+    const target = getAddSession();
+    addInput.disabled = !target;
+    addBtn.disabled = !target || addInput.value.trim().length === 0;
     autoGrow(addInput);
-  });
-  // Enter submits, Shift+Enter inserts a newline (rarely useful but harmless).
-  addInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (!addBtn.disabled) addForm.requestSubmit();
-    }
-  });
-  addForm.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const desc = addInput.value.trim();
-    if (!desc || !activeId) return;
-    addBtn.disabled = true; addInput.disabled = true;
-    try {
-      await api("/api/mutate", { op: "add", sessionId: activeId, description: desc });
-      addInput.value = "";
-      showToast("added");
-    } catch (e) {
-      console.error(e); showToast("add failed", true);
-    } finally {
-      addInput.disabled = !activeId;
-      addBtn.disabled = !activeId || addInput.value.trim().length === 0;
-      autoGrow(addInput);
-      addInput.focus();
-    }
-  });
-
-  // Keyed DOM caches so unchanged chips/cards aren't rebuilt — eliminates
-  // the full-pane flicker on every mutation. Maps live in the closure.
-  const chipCache = new Map(); // sessionId -> { el, lbl, badge }
-  const cardCache = new Map(); // itemId   -> { el, titleEl, posEl, ageEl, idEl, description, position, top, age }
-
-  // --- Render rail (sidebar) ---
-  function renderRail() {
-    const sessions = snapshot.sessions || [];
-    if (sessions.length === 0) {
-      rail.innerHTML = '<div class="empty">no sessions</div>';
-      chipCache.clear();
-      return;
-    }
-    // Drop the placeholder if present.
-    const placeholder = rail.querySelector(".empty");
-    if (placeholder) placeholder.remove();
-
-    const liveIds = new Set(sessions.map(s => s.id));
-    // Remove chips for sessions that disappeared.
-    for (const [sid, entry] of chipCache) {
-      if (!liveIds.has(sid)) {
-        entry.el.remove();
-        chipCache.delete(sid);
-      }
-    }
-
-    sessions.forEach((s, idx) => {
-      const cached = chipCache.get(s.id);
-      const count = s.items.length;
-      if (!cached) {
-        const chip = document.createElement("div");
-        chip.dataset.sid = s.id;
-        const dot = document.createElement("span"); dot.className = "live-dot";
-        const lbl = document.createElement("span"); lbl.className = "label";
-        const badge = document.createElement("span"); badge.className = "badge";
-        chip.append(dot, lbl, badge);
-        chip.addEventListener("click", () => { activeId = s.id; renderAll(); });
-        rail.appendChild(chip);
-        chipCache.set(s.id, { el: chip, lbl, badge });
-      }
-      const entry = chipCache.get(s.id);
-      const desiredClass = "chip"
-        + (s.id === activeId ? " active" : "")
-        + (s.live ? " live" : " dead")
-        + (s.live && s.state === "busy" ? " busy" : "");
-      if (entry.el.className !== desiredClass) entry.el.className = desiredClass;
-      const stateLabel = !s.live ? "offline" : (s.state === "busy" ? "busy" : "idle");
-      const title = (s.cwd || s.id) + " · " + stateLabel;
-      if (entry.el.title !== title) entry.el.title = title;
-      if (entry.lbl.textContent !== s.label) entry.lbl.textContent = s.label;
-      const countText = String(count);
-      if (entry.badge.textContent !== countText) entry.badge.textContent = countText;
-      // Keep DOM order in sync with snapshot order.
-      const expected = rail.children[idx];
-      if (expected !== entry.el) rail.insertBefore(entry.el, expected || null);
-    });
+    addInput.focus();
   }
+});
 
-  // --- Render main (active partition) ---
-  function renderMain() {
-    const session = (snapshot.sessions || []).find(s => s.id === activeId);
-    if (!session) {
-      list.innerHTML = '<div class="partition-empty">select a session</div>';
-      cardCache.clear();
-      addInput.disabled = true; addBtn.disabled = true;
-      return;
-    }
-    addInput.disabled = false;
-    addBtn.disabled = addInput.value.trim().length === 0;
-    addInput.placeholder = `Add to ${session.label}…`;
-
-    const items = session.items || [];
-    if (items.length === 0) {
-      list.innerHTML = '<div class="partition-empty">no items in this session</div>';
-      cardCache.clear();
-      return;
-    }
-    // Drop the placeholder if present.
-    const placeholder = list.querySelector(".partition-empty");
-    if (placeholder) placeholder.remove();
-
-    const seen = new Set(items.map(i => i.id));
-    for (const [itemId, entry] of cardCache) {
-      if (!seen.has(itemId) || entry.sessionId !== session.id) {
-        entry.el.remove();
-        cardCache.delete(itemId);
-      }
-    }
-
-    items.forEach((it, idx) => {
-      const isTop = idx === 0;
-      let entry = cardCache.get(it.id);
-      if (!entry) entry = createCard(session.id, it);
-      // Reorder if needed.
-      const expected = list.children[idx];
-      if (expected !== entry.el) list.insertBefore(entry.el, expected || null);
-      // Update fields in place. Authoritative engaging state comes from the
-      // snapshot so burndown auto-engage looks the same as a manual click.
-      const isEngaging = session.engagingId === it.id;
-      const klass = "card"
-        + (isTop ? " top" : "")
-        + (it.source === "friction" ? " friction" : "")
-        + (entry.editing ? " editing" : "")
-        + (isEngaging ? " engaging" : "");
-      if (entry.el.className !== klass) {
-        entry.el.className = klass;
-      }
-      if (entry.description !== it.description && !entry.editing) {
-        entry.titleEl.textContent = it.description;
-        entry.description = it.description;
-      }
-      const posText = "#" + it.position;
-      if (entry.posEl.textContent !== posText) entry.posEl.textContent = posText;
-      if (entry.idEl.textContent !== it.id) entry.idEl.textContent = it.id;
-      const ageText = relAge(it.created_at);
-      if (entry.ageEl.textContent !== ageText) entry.ageEl.textContent = ageText;
-      updateFrictionMeta(entry, it);
-      entry.upBtn.disabled = idx === 0;
-      entry.downBtn.disabled = idx === items.length - 1;
-      entry.position = it.position;
-      entry.created_at = it.created_at;
-      entry.sessionId = session.id;
-      entry.itemRef = it;
-      entry.live = session.live;
-    });
+function renderRail() {
+  const queues = snapshot.queues || [];
+  rail.innerHTML = "";
+  if (queues.length === 0) {
+    rail.innerHTML = '<div class="empty">no queues</div>';
+    return;
   }
+  queues.forEach((queue) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip" + (queue.id === activeQueueId ? " active" : "");
+    chip.title = queue.name + " · " + queue.itemCount + " item" + (queue.itemCount === 1 ? "" : "s");
+    chip.innerHTML = `<span class="label">${queue.name}</span><span class="badge">${queue.itemCount || 0}</span>`;
+    chip.addEventListener("click", () => { activeQueueId = queue.id; renderAll(); });
+    rail.appendChild(chip);
+  });
+}
 
-  function createCard(sessionId, it) {
+function renderMain() {
+  const queue = getSelectedQueue();
+  const addSession = getAddSession();
+  if (!queue) {
+    list.innerHTML = '<div class="partition-empty">select a queue</div>';
+    addInput.disabled = true; addBtn.disabled = true;
+    return;
+  }
+  addInput.disabled = !addSession;
+  addBtn.disabled = !addSession || addInput.value.trim().length === 0;
+  addInput.placeholder = addSession ? `Add to ${queue.name}…` : "No live session available…";
+
+  const items = queue.items || [];
+  if (items.length === 0) {
+    list.innerHTML = '<div class="partition-empty">no items in this queue</div>';
+    return;
+  }
+  list.innerHTML = "";
+  items.forEach((item) => {
     const card = document.createElement("div");
-    card.dataset.id = it.id;
+    card.className = "card";
+    card.dataset.id = item.id;
 
-    const titleRow = document.createElement("div"); titleRow.className = "title-row";
-    const titleEl = document.createElement("div"); titleEl.className = "title"; titleEl.textContent = it.description;
-    const hint = document.createElement("span"); hint.className = "engage-hint"; hint.textContent = "click to engage";
+    const titleRow = document.createElement("div");
+    titleRow.className = "title-row";
+    const titleEl = document.createElement("div");
+    titleEl.className = "title";
+    titleEl.textContent = item.description;
+    const hint = document.createElement("span");
+    hint.className = "engage-hint";
+    hint.textContent = "click to engage";
     titleRow.append(titleEl, hint);
 
-    const meta = document.createElement("div"); meta.className = "meta";
-    const posEl = document.createElement("span"); posEl.className = "pos"; posEl.textContent = "#" + it.position;
-    const idEl = document.createElement("span"); idEl.className = "id"; idEl.textContent = it.id;
-    const ageEl = document.createElement("span"); ageEl.className = "age"; ageEl.textContent = relAge(it.created_at);
-    const frictionChip = document.createElement("span"); frictionChip.className = "friction-chip";
-    const contextEl = document.createElement("div"); contextEl.className = "context";
-    meta.append(posEl, frictionChip, idEl, ageEl);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const posEl = document.createElement("span");
+    posEl.className = "pos";
+    posEl.textContent = "#" + item.position;
+    const idEl = document.createElement("span");
+    idEl.className = "id";
+    idEl.textContent = item.id;
+    const sessionEl = document.createElement("span");
+    sessionEl.className = "session";
+    sessionEl.textContent = item.session_label || item.session_id;
+    const ageEl = document.createElement("span");
+    ageEl.className = "age";
+    ageEl.textContent = relAge(item.created_at);
+    meta.append(posEl, idEl, sessionEl, ageEl);
 
-    const actions = document.createElement("div"); actions.className = "actions";
+    const contextEl = document.createElement("div");
+    contextEl.className = "context";
+    if (item.por_context_summary) {
+      contextEl.textContent = item.por_context_summary;
+      contextEl.style.display = "block";
+    } else {
+      contextEl.style.display = "none";
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
     actions.addEventListener("click", (e) => e.stopPropagation());
-    const upBtn   = mkAction("↑", "Move up",   () => mutate({ op: "up",   sessionId: entry.sessionId, id: entry.itemRef.id }, "moved up"));
-    const downBtn = mkAction("↓", "Move down", () => mutate({ op: "down", sessionId: entry.sessionId, id: entry.itemRef.id }, "moved down"));
-    const editBtn = mkAction("✎", "Edit",      () => beginEdit(entry, entry.sessionId, entry.itemRef));
-    const spacer  = document.createElement("span"); spacer.className = "spacer";
-    const delBtn  = mkAction("✕", "Delete",    () => mutate({ op: "delete", sessionId: entry.sessionId, id: entry.itemRef.id }, "deleted"));
+    const upBtn = mkAction("↑", "Move up", () => mutate({ op: "up", sessionId: item.session_id, id: item.id, queueId: queue.id }, "moved up"));
+    const downBtn = mkAction("↓", "Move down", () => mutate({ op: "down", sessionId: item.session_id, id: item.id, queueId: queue.id }, "moved down"));
+    const editBtn = mkAction("✎", "Edit", () => beginEdit(card, titleEl, item, queue.id));
+    const spacer = document.createElement("span");
+    spacer.className = "spacer";
+    const delBtn = mkAction("✕", "Delete", () => mutate({ op: "delete", sessionId: item.session_id, id: item.id, queueId: queue.id }, "deleted"));
     delBtn.classList.add("danger");
     actions.append(upBtn, downBtn, editBtn, spacer, delBtn);
 
     card.append(titleRow, meta, contextEl, actions);
-    list.appendChild(card);
-
     titleRow.addEventListener("click", () => {
-      if (entry.editing) return;
-      if (!entry.live) { showToast("session is offline", true); return; }
-      engage(entry.el, entry.sessionId, entry.itemRef);
+      if (!item.session_live) { showToast("session is offline", true); return; }
+      engage(card, item.session_id, item);
     });
+    list.appendChild(card);
+  });
+}
 
-    const entry = {
-      el: card, titleEl, posEl, idEl, ageEl,
-      frictionChip, contextEl,
-      upBtn, downBtn, editBtn, delBtn,
-      sessionId, itemRef: it, description: it.description,
-      position: it.position, created_at: it.created_at,
-      editing: false, live: true,
-    };
-    cardCache.set(it.id, entry);
-    updateFrictionMeta(entry, it);
-    return entry;
+function renderAll() {
+  if (!activeQueueId && (snapshot.queues || []).length > 0) {
+    activeQueueId = snapshot.queues[0].id;
   }
-
-  function updateFrictionMeta(entry, it) {
-    const isFriction = it.source === "friction";
-    entry.frictionChip.style.display = isFriction ? "" : "none";
-    entry.contextEl.style.display = isFriction ? "" : "none";
-    if (!isFriction) return;
-    const category = (it.friction_category || "friction").replace(/_/g, " ");
-    const count = it.occurrence_count || 1;
-    const tool = it.friction_tool || "tool";
-    const chipText = `auto · ${category} · ${tool} · ${count}x`;
-    if (entry.frictionChip.textContent !== chipText) entry.frictionChip.textContent = chipText;
-    const event = it.latest_context?.primary_event || {};
-    const contextText = [
-      event.error_message_redacted || "",
-      it.last_seen_at ? `last seen ${relAge(it.last_seen_at)}` : "",
-      it.first_seen_at ? `first seen ${relAge(it.first_seen_at)}` : "",
-    ].filter(Boolean).join(" · ");
-    entry.contextEl.textContent = contextText || "auto-detected friction";
+  const sessions = snapshot.sessions || [];
+  if (!addSessionId || !sessions.find((session) => session.id === addSessionId && session.live)) {
+    addSessionId = snapshot.activeSessionId || sessions.find((session) => session.live)?.id || null;
   }
+  const total = sessions.reduce((count, session) => count + session.items.length, 0);
+  setStatus(total + (total === 1 ? " item" : " items") + " · " + sessions.length + " session" + (sessions.length === 1 ? "" : "s"), status.classList.contains("bad") ? "bad" : "live");
+  renderRail();
+  renderMain();
+  renderBurndown();
+  renderRuntime();
+}
 
-  function renderAll() {
-    const sessions = snapshot.sessions || [];
-    // Pick a default active if none chosen, or if previous one disappeared.
-    if (!activeId || !sessions.find(s => s.id === activeId)) {
-      activeId = snapshot.activeSessionId
-        || (sessions.find(s => s.live)?.id)
-        || (sessions[0]?.id)
-        || null;
-    }
-    const total = sessions.reduce((n, s) => n + s.items.length, 0);
-    setStatus(total + (total === 1 ? " item" : " items") + " · " + sessions.length + " session" + (sessions.length === 1 ? "" : "s"),
-      status.classList.contains("bad") ? "bad" : "live");
-    renderRail();
-    renderMain();
-    renderBurndown();
-    renderFrictionToggle();
-    renderRuntime();
+function renderBurndown() {
+  const session = getAddSession();
+  const enabled = !!session?.burndown;
+  const live = !!session?.live;
+  burndownBtn.classList.toggle("on", enabled);
+  burndownBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
+  burndownBtn.disabled = !live;
+  burndownBtn.textContent = enabled ? "🔥 Burndown ON" : "🔥 Burndown";
+}
+
+function mkAction(glyph, title, onClick) {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = glyph; b.title = title;
+  b.setAttribute("aria-label", title);
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+async function mutate(body, successMsg) {
+  try {
+    await api("/api/mutate", body);
+    if (successMsg) showToast(successMsg);
+  } catch (e) {
+    console.error(e); showToast("action failed", true);
   }
+}
 
-  function renderBurndown() {
-    const session = (snapshot.sessions || []).find(s => s.id === activeId);
-    const enabled = !!session?.burndown;
-    const live = !!session?.live;
-    burndownBtn.classList.toggle("on", enabled);
-    burndownBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
-    burndownBtn.disabled = !live;
-    burndownBtn.textContent = enabled ? "🔥 Burndown ON" : "🔥 Burndown";
-  }
-
-  function renderFrictionToggle() {
-    const enabled = snapshot.frictionCaptureEnabled !== false;
-    frictionBtn.classList.toggle("on", enabled);
-    frictionBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
-    frictionBtn.textContent = enabled ? "⚠ Friction ON" : "⚠ Friction OFF";
-  }
-
-  function mkAction(glyph, title, onClick) {
-    const b = document.createElement("button");
-    b.type = "button"; b.textContent = glyph; b.title = title;
-    b.setAttribute("aria-label", title);
-    b.addEventListener("click", onClick);
-    return b;
-  }
-
-  async function mutate(body, successMsg) {
+function beginEdit(card, titleEl, item, queueId) {
+  const input = document.createElement("textarea");
+  input.className = "title-input";
+  input.rows = 1;
+  input.value = item.description;
+  input.maxLength = 500;
+  titleEl.replaceWith(input);
+  card.classList.add("editing");
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+  autoGrow(input);
+  input.addEventListener("input", () => autoGrow(input));
+  let done = false;
+  const finish = async (commit) => {
+    if (done) return;
+    done = true;
+    const newDesc = input.value.trim();
     try {
-      await api("/api/mutate", body);
-      if (successMsg) showToast(successMsg);
-    } catch (e) {
-      console.error(e); showToast("action failed", true);
-    }
-  }
-
-  function beginEdit(entry, sid, item) {
-    if (entry.editing) return;
-    entry.editing = true;
-    entry.el.classList.add("editing");
-    const titleEl = entry.titleEl;
-    const input = document.createElement("textarea");
-    input.className = "title-input";
-    input.rows = 1;
-    input.value = item.description; input.maxLength = 500;
-    titleEl.replaceWith(input);
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-    autoGrow(input);
-    input.addEventListener("input", () => autoGrow(input));
-    let done = false;
-    const finish = async (commit) => {
-      if (done) return;
-      done = true;
-      const newDesc = input.value.trim();
-      try {
-        if (commit && newDesc && newDesc !== item.description) {
-          await mutate({ op: "edit", sessionId: sid, id: item.id, description: newDesc }, "edited");
-          titleEl.textContent = newDesc;
-          entry.description = newDesc;
-        }
-      } finally {
-        input.replaceWith(titleEl);
-        entry.editing = false;
-        entry.el.classList.remove("editing");
+      if (commit && newDesc && newDesc !== item.description) {
+        await mutate({ op: "edit", sessionId: item.session_id, id: item.id, description: newDesc, queueId }, "edited");
+        titleEl.textContent = newDesc;
       }
-    };
-    input.addEventListener("keydown", (e) => {
-      // Enter commits; Shift+Enter inserts a literal newline (still capped
-      // at maxLength, and the title row will wrap up to 3 visible lines).
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); finish(true); }
-      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
-    });
-    input.addEventListener("blur", () => finish(true));
-  }
-
-  async function engage(card, sid, it) {
-    card.classList.add("engaging");
-    showToast("engaging " + it.id);
-    try {
-      await api("/api/engage", { sessionId: sid, id: it.id });
-    } catch (e) {
-      console.error(e);
-      const isOffline = /409|503/.test(e.message || "");
-      showToast(isOffline ? "session is offline" : "engage failed", true);
-      card.classList.remove("engaging");
+    } finally {
+      input.replaceWith(titleEl);
+      card.classList.remove("editing");
     }
-  }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
 
-  async function loadInitial() {
+async function engage(card, sid, item) {
+  card.classList.add("engaging");
+  showToast("engaging " + item.id);
+  try {
+    await api("/api/engage", { sessionId: sid, id: item.id });
+  } catch (e) {
+    console.error(e);
+    const isOffline = /409|503/.test(e.message || "");
+    showToast(isOffline ? "session is offline" : "engage failed", true);
+    card.classList.remove("engaging");
+  }
+}
+
+async function loadInitial() {
+  try {
+    const res = await fetch("/api/snapshot?token=" + encodeURIComponent(TOKEN));
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    snapshot = await res.json();
+    renderAll();
+  } catch (e) {
+    console.error("initial load failed", e);
+    setStatus("load failed", "bad");
+  }
+}
+
+let ws = null, reconnectMs = 500;
+function connect() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(proto + "//" + location.host + "/ws?token=" + encodeURIComponent(TOKEN));
+  ws.onopen = () => { reconnectMs = 500; renderAll(); };
+  ws.onmessage = (ev) => {
     try {
-      const res = await fetch("/api/snapshot?token=" + encodeURIComponent(TOKEN));
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      snapshot = await res.json();
-      renderAll();
-    } catch (e) {
-      console.error("initial load failed", e);
-      setStatus("load failed", "bad");
-    }
-  }
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "snapshot") { snapshot = msg; renderAll(); }
+      else if (msg.type === "close") { intentionalClose = true; window.close(); }
+    } catch (e) { console.error("ws parse", e); }
+  };
+  ws.onclose = () => {
+    if (intentionalClose) return;
+    setStatus("reconnecting…", "bad");
+    setTimeout(connect, reconnectMs);
+    reconnectMs = Math.min(reconnectMs * 2, 5000);
+  };
+  ws.onerror = () => { try { ws.close(); } catch {} };
+}
 
-  let ws = null, reconnectMs = 500;
-  function connect() {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(proto + "//" + location.host + "/ws?token=" + encodeURIComponent(TOKEN));
-    ws.onopen = () => { reconnectMs = 500; renderAll(); };
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === "snapshot") { snapshot = msg; renderAll(); }
-        else if (msg.type === "close") { intentionalClose = true; window.close(); }
-      } catch (e) { console.error("ws parse", e); }
-    };
-    ws.onclose = () => {
-      if (intentionalClose) return;
-      setStatus("reconnecting…", "bad");
-      setTimeout(connect, reconnectMs);
-      reconnectMs = Math.min(reconnectMs * 2, 5000);
-    };
-    ws.onerror = () => { try { ws.close(); } catch {} };
-  }
-
-  loadInitial().then(connect);
-
-  // Refresh ages every 30s without re-fetching.
-  setInterval(() => {
-    document.querySelectorAll(".card").forEach((card) => {
-      const ageEl = card.querySelector(".age");
-      if (!ageEl) return;
-      const session = (snapshot.sessions || []).find(s => s.id === activeId);
-      const items = session?.items || [];
-      const idx = Array.from(card.parentNode.children).indexOf(card);
-      const it = items[idx];
-      if (it) ageEl.textContent = relAge(it.created_at);
-    });
-  }, 30000);
+loadInitial().then(connect);
 })();
 </script>
 </body>

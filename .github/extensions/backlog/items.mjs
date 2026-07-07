@@ -13,13 +13,30 @@
 // every reference is inside a function body that runs after both
 // modules have finished initializing.
 
-import { db, tx, ensureSession } from "./db.mjs";
+import {
+  db,
+  tx,
+  ensureSession,
+  deleteItemDependentsByIds,
+  deleteItemDependentsForSession,
+  ensureQueue,
+  getQueue,
+  attachItemPorContext as attachPorContext,
+  getItemPorContext as getPorContext,
+  removeItemPorContext as removePorContext,
+} from "./db.mjs";
 import {
   sidecarState,
   sidecarBroadcast,
   clearViewerSuppression,
   maybeBurndownNext,
 } from "./sidecar.mjs";
+
+function normalizeQueueId(queueId) {
+  const resolved = queueId || "inbox";
+  ensureQueue(resolved);
+  return resolved;
+}
 
 export function generateId(description) {
   const base = description
@@ -36,192 +53,90 @@ export function generateId(description) {
   return id;
 }
 
-export function getNextPosition(sessionId) {
+export function getNextPosition(sessionId, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   const row = db.prepare(
-    "SELECT COALESCE(MAX(position), 0) + 1 as next FROM items WHERE session_id = ? AND status = ?"
-  ).get(sessionId, "pending");
+    "SELECT COALESCE(MAX(position), 0) + 1 as next FROM items WHERE session_id = ? AND queue_id = ? AND status = ?"
+  ).get(sessionId, queue, "pending");
   return row.next;
 }
 
-export function resolveItemRef(ref, sessionId) {
+export function resolveItemRef(ref, sessionId, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   if (/^\d+$/.test(String(ref || ""))) {
     const pos = parseInt(ref, 10);
     return db.prepare(
-      "SELECT * FROM items WHERE session_id = ? AND status = ? AND position = ?"
-    ).get(sessionId, "pending", pos);
+      "SELECT * FROM items WHERE session_id = ? AND queue_id = ? AND status = ? AND position = ?"
+    ).get(sessionId, queue, "pending", pos);
   }
   return db.prepare(
-    "SELECT * FROM items WHERE id = ? AND session_id = ?"
-  ).get(ref, sessionId);
+    "SELECT * FROM items WHERE id = ? AND session_id = ? AND queue_id = ?"
+  ).get(ref, sessionId, queue);
 }
 
-export function reorderPositions(sessionId) {
+export function reorderPositions(sessionId, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   const items = db.prepare(
-    "SELECT id FROM items WHERE session_id = ? AND status = ? ORDER BY position"
-  ).all(sessionId, "pending");
+    "SELECT id FROM items WHERE session_id = ? AND queue_id = ? AND status = ? ORDER BY position"
+  ).all(sessionId, queue, "pending");
   const update = db.prepare("UPDATE items SET position = ? WHERE id = ?");
   items.forEach((item, idx) => update.run(idx + 1, item.id));
 }
 
-export function reorderFrictionLane(sessionId) {
-  const items = db.prepare(`
-    SELECT id, source
-    FROM items
-    WHERE session_id = ? AND status = ?
-    ORDER BY
-      CASE WHEN source = 'friction' THEN 1 ELSE 0 END,
-      CASE WHEN source = 'friction' THEN datetime(COALESCE(last_seen_at, created_at)) END DESC,
-      CASE WHEN source = 'friction' THEN COALESCE(occurrence_count, 1) END DESC,
-      position
-  `).all(sessionId, "pending");
-  const update = db.prepare("UPDATE items SET position = ? WHERE id = ?");
-  items.forEach((item, idx) => update.run(idx + 1, item.id));
-}
-
-export function getPendingCount(sessionId) {
+export function getPendingCount(sessionId, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   return db.prepare(
-    "SELECT COUNT(*) as count FROM items WHERE session_id = ? AND status = ?"
-  ).get(sessionId, "pending").count;
+    "SELECT COUNT(*) as count FROM items WHERE session_id = ? AND queue_id = ? AND status = ?"
+  ).get(sessionId, queue, "pending").count;
 }
 
-export function getTopItem(sessionId) {
+export function getTopItem(sessionId, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   return db.prepare(
-    "SELECT id, description FROM items WHERE session_id = ? AND status = ? ORDER BY position LIMIT 1"
-  ).get(sessionId, "pending");
+    "SELECT id, description FROM items WHERE session_id = ? AND queue_id = ? AND status = ? ORDER BY position LIMIT 1"
+  ).get(sessionId, queue, "pending");
 }
 
-export function addItem(sessionId, description, isTop = false) {
+export function addItem(sessionId, description, isTop = false, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   const out = tx(() => {
     ensureSession(sessionId);
     const id = generateId(description);
     let position;
     if (isTop) {
       db.prepare(
-        "UPDATE items SET position = position + 1 WHERE session_id = ? AND status = ?"
-      ).run(sessionId, "pending");
+        "UPDATE items SET position = position + 1 WHERE session_id = ? AND queue_id = ? AND status = ?"
+      ).run(sessionId, queue, "pending");
       position = 1;
     } else {
-      position = getNextPosition(sessionId);
+      position = getNextPosition(sessionId, queue);
     }
     db.prepare(
-      "INSERT INTO items (id, session_id, description, position, source) VALUES (?, ?, ?, ?, ?)"
-    ).run(id, sessionId, description, position, "manual");
-    return { id, position };
+      "INSERT INTO items (id, session_id, description, position, queue_id) VALUES (?, ?, ?, ?, ?)"
+    ).run(id, sessionId, description, position, queue);
+    return { id, position, queue_id: queue };
   });
-  // New item should re-open the viewer even if the user previously dismissed
-  // it, so they see the work piling up.
   clearViewerSuppression();
   sidecarBroadcast(sessionId);
   return out;
 }
 
-export function appendItemContext(itemId, context) {
-  const payload = JSON.stringify(context || {});
-  db.prepare(
-    "INSERT INTO item_contexts (item_id, context_json) VALUES (?, ?)"
-  ).run(itemId, payload);
-  const oldRows = db.prepare(`
-    SELECT id FROM item_contexts
-    WHERE item_id = ?
-    ORDER BY created_at DESC, id DESC
-    LIMIT -1 OFFSET 5
-  `).all(itemId);
-  const del = db.prepare("DELETE FROM item_contexts WHERE id = ?");
-  oldRows.forEach((row) => del.run(row.id));
-}
-
-export function getLatestItemContext(itemId) {
-  const row = db.prepare(`
-    SELECT context_json
-    FROM item_contexts
-    WHERE item_id = ?
-    ORDER BY created_at DESC, id DESC
-    LIMIT 1
-  `).get(itemId);
-  if (!row) return null;
-  try { return JSON.parse(row.context_json); }
-  catch { return null; }
-}
-
-function deleteItemContexts(itemId) {
-  db.prepare("DELETE FROM item_contexts WHERE item_id = ?").run(itemId);
-}
-
-export function addFrictionItem(sessionId, friction) {
-  const now = new Date().toISOString();
-  const out = tx(() => {
-    ensureSession(sessionId);
-    const existing = db.prepare(`
-      SELECT *
-      FROM items
-      WHERE session_id = ? AND status = ? AND source = ? AND friction_key = ?
-      ORDER BY created_at
-      LIMIT 1
-    `).get(sessionId, "pending", "friction", friction.key);
-    if (existing) {
-      const count = (existing.occurrence_count || 1) + 1;
-      db.prepare(`
-        UPDATE items
-        SET occurrence_count = ?,
-            last_seen_at = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(count, now, existing.id);
-      appendItemContext(existing.id, friction.context);
-      reorderFrictionLane(sessionId);
-      const updated = db.prepare("SELECT * FROM items WHERE id = ?").get(existing.id);
-      return { item: updated, created: false };
-    }
-
-    const id = generateId(friction.description);
-    const position = getNextPosition(sessionId);
-    db.prepare(`
-      INSERT INTO items (
-        id, session_id, description, position, source, friction_category,
-        friction_tool, friction_key, occurrence_count, first_seen_at, last_seen_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      sessionId,
-      friction.description,
-      position,
-      "friction",
-      friction.category,
-      friction.tool,
-      friction.key,
-      1,
-      now,
-      now,
-    );
-    appendItemContext(id, friction.context);
-    reorderFrictionLane(sessionId);
-    const created = db.prepare("SELECT * FROM items WHERE id = ?").get(id);
-    return { item: created, created: true };
-  });
-  if (out.created) clearViewerSuppression();
-  sidecarBroadcast(sessionId);
-  return out;
-}
-
-export function markDone(sessionId, ref) {
+export function markDone(sessionId, ref, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   const item = tx(() => {
-    const it = resolveItemRef(ref, sessionId);
+    const it = resolveItemRef(ref, sessionId, queue);
     if (!it) return null;
     db.prepare(
       "UPDATE items SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
     ).run("done", it.id);
-    reorderPositions(sessionId);
+    reorderPositions(sessionId, queue);
     return it;
   });
   if (item) {
     if (sidecarState.engaging.get(sessionId) === item.id) {
       sidecarState.engaging.delete(sessionId);
     }
-    // Auto-disable burndown when the last pending item is cleared so the
-    // toggle reflects "nothing to burn down" without the user having to
-    // turn it off manually. Re-adding items doesn't re-arm it — the user
-    // must explicitly turn burndown back on.
-    if (sidecarState.burndown.has(sessionId) && getPendingCount(sessionId) === 0) {
+    if (sidecarState.burndown.has(sessionId) && getPendingCount(sessionId, queue) === 0) {
       sidecarState.burndown.delete(sessionId);
     }
     sidecarBroadcast(sessionId);
@@ -230,13 +145,14 @@ export function markDone(sessionId, ref) {
   return item;
 }
 
-export function removeItem(sessionId, ref) {
+export function removeItem(sessionId, ref, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   const item = tx(() => {
-    const it = resolveItemRef(ref, sessionId);
+    const it = resolveItemRef(ref, sessionId, queue);
     if (!it) return null;
-    deleteItemContexts(it.id);
+    deleteItemDependentsByIds([it.id]);
     db.prepare("DELETE FROM items WHERE id = ?").run(it.id);
-    reorderPositions(sessionId);
+    reorderPositions(sessionId, queue);
     return it;
   });
   if (item) {
@@ -248,39 +164,41 @@ export function removeItem(sessionId, ref) {
   return item;
 }
 
-export function clearSessionItems(sessionId) {
+export function clearSessionItems(sessionId, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   const result = tx(() => {
-    const items = db.prepare("SELECT id FROM items WHERE session_id = ?").all(sessionId);
-    for (const item of items) deleteItemContexts(item.id);
-    return db.prepare("DELETE FROM items WHERE session_id = ?").run(sessionId);
+    deleteItemDependentsForSession(sessionId, queue);
+    return db.prepare("DELETE FROM items WHERE session_id = ? AND queue_id = ?").run(sessionId, queue);
   });
   sidecarBroadcast(sessionId);
   return result;
 }
 
-export function moveTop(sessionId, ref) {
+export function moveTop(sessionId, ref, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   const item = tx(() => {
-    const it = resolveItemRef(ref, sessionId);
+    const it = resolveItemRef(ref, sessionId, queue);
     if (!it) return null;
     if (it.position === 1) return it;
     db.prepare(
-      "UPDATE items SET position = position + 1 WHERE session_id = ? AND status = ? AND position < ?"
-    ).run(sessionId, "pending", it.position);
+      "UPDATE items SET position = position + 1 WHERE session_id = ? AND queue_id = ? AND status = ? AND position < ?"
+    ).run(sessionId, queue, "pending", it.position);
     db.prepare("UPDATE items SET position = 1 WHERE id = ?").run(it.id);
-    reorderPositions(sessionId);
+    reorderPositions(sessionId, queue);
     return it;
   });
   if (item) sidecarBroadcast(sessionId);
   return item;
 }
 
-export function moveUp(sessionId, ref) {
+export function moveUp(sessionId, ref, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   const item = tx(() => {
-    const it = resolveItemRef(ref, sessionId);
+    const it = resolveItemRef(ref, sessionId, queue);
     if (!it || it.position === 1) return it;
     const above = db.prepare(
-      "SELECT * FROM items WHERE session_id = ? AND status = ? AND position = ?"
-    ).get(sessionId, "pending", it.position - 1);
+      "SELECT * FROM items WHERE session_id = ? AND queue_id = ? AND status = ? AND position = ?"
+    ).get(sessionId, queue, "pending", it.position - 1);
     if (above) {
       db.prepare("UPDATE items SET position = ? WHERE id = ?").run(it.position, above.id);
       db.prepare("UPDATE items SET position = ? WHERE id = ?").run(it.position - 1, it.id);
@@ -291,13 +209,14 @@ export function moveUp(sessionId, ref) {
   return item;
 }
 
-export function moveDown(sessionId, ref) {
+export function moveDown(sessionId, ref, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   const item = tx(() => {
-    const it = resolveItemRef(ref, sessionId);
+    const it = resolveItemRef(ref, sessionId, queue);
     if (!it) return null;
     const below = db.prepare(
-      "SELECT * FROM items WHERE session_id = ? AND status = ? AND position = ?"
-    ).get(sessionId, "pending", it.position + 1);
+      "SELECT * FROM items WHERE session_id = ? AND queue_id = ? AND status = ? AND position = ?"
+    ).get(sessionId, queue, "pending", it.position + 1);
     if (!below) return it;
     db.prepare("UPDATE items SET position = ? WHERE id = ?").run(it.position, below.id);
     db.prepare("UPDATE items SET position = ? WHERE id = ?").run(it.position + 1, it.id);
@@ -307,11 +226,12 @@ export function moveDown(sessionId, ref) {
   return item;
 }
 
-export function editItem(sessionId, ref, newDescription) {
+export function editItem(sessionId, ref, newDescription, queueId = null) {
+  const queue = normalizeQueueId(queueId);
   const desc = (newDescription || "").trim();
   if (!desc) return null;
   const item = tx(() => {
-    const it = resolveItemRef(ref, sessionId);
+    const it = resolveItemRef(ref, sessionId, queue);
     if (!it) return null;
     db.prepare(
       "UPDATE items SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
@@ -320,4 +240,32 @@ export function editItem(sessionId, ref, newDescription) {
   });
   if (item) sidecarBroadcast(sessionId);
   return item;
+}
+
+export function createQueue(queueSpec) {
+  return ensureQueue(queueSpec.id, queueSpec);
+}
+
+export function listQueues() {
+  return getQueue ? db.prepare("SELECT * FROM queues ORDER BY name, created_at").all().map((row) => ({
+    ...row,
+    metadata: row.metadata_json ? JSON.parse(row.metadata_json) : {},
+  })) : [];
+}
+
+export function updateQueue(queueId, updates) {
+  return db.prepare("UPDATE queues SET name = ?, description = ?, metadata_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .run(updates.name, updates.description ?? null, JSON.stringify(updates.metadata ?? {}), queueId);
+}
+
+export function attachItemPorContext(...args) {
+  return attachPorContext(...args);
+}
+
+export function getItemPorContext(itemId) {
+  return getPorContext(itemId);
+}
+
+export function removeItemPorContext(itemId) {
+  return removePorContext(itemId);
 }

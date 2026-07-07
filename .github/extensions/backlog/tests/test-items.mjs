@@ -1,13 +1,21 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
 import {
+  db,
+  pruneSessions,
+  setItemGate,
+  setItemWaiver,
+  createQueue,
+  attachItemPorContext,
+  getItemPorContext,
+  removeItemPorContext,
+} from "../db.mjs";
+import {
   addItem,
   markDone,
   removeItem,
-  moveTop,
-  moveUp,
-  moveDown,
   editItem,
+  clearSessionItems,
   getTopItem,
   getPendingCount,
   resolveItemRef,
@@ -58,5 +66,49 @@ assert(eEmpty === null, "edit with whitespace-only description returns null");
 // resolveItemRef returns null for missing ids
 const missing = resolveItemRef("does-not-exist", sid);
 assert(!missing, "resolveItemRef returns falsy for missing id");
+
+const clearSid = "test-clear-session";
+const clearOne = addItem(clearSid, "clear one");
+const clearTwo = addItem(clearSid, "clear two");
+setItemGate({ itemId: clearOne.id, gateKind: "start", state: "approved", actor: "test" });
+setItemWaiver({ itemId: clearTwo.id, gateKind: "review", mode: "sticky", actor: "test" });
+const cleared = clearSessionItems(clearSid);
+assertEqual(cleared.changes, 2, "clear removes all session items");
+assertEqual(getPendingCount(clearSid), 0, "clear leaves no pending items");
+
+const gated = addItem(sid, "gated remove");
+setItemGate({ itemId: gated.id, gateKind: "start", state: "approved", actor: "test" });
+setItemWaiver({ itemId: gated.id, gateKind: "review", mode: "sticky", actor: "test" });
+assertEqual(removeItem(sid, gated.id).description, "gated remove", "remove deletes gated item");
+assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_gates WHERE item_id = ?").get(gated.id).count, 0, "remove deletes item gates");
+assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_waivers WHERE item_id = ?").get(gated.id).count, 0, "remove deletes item waivers");
+
+const pruneSid = "test-prune-session";
+const pruneItem = addItem(pruneSid, "gated prune");
+setItemGate({ itemId: pruneItem.id, gateKind: "start", state: "approved", actor: "test" });
+db.prepare("UPDATE sessions SET last_accessed = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", pruneSid);
+assertEqual(pruneSessions(7), 1, "prune removes stale gated session");
+assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_gates WHERE item_id = ?").get(pruneItem.id).count, 0, "prune deletes item gates");
+
+const queue = createQueue({ id: "custom-queue", name: "Custom" });
+assertEqual(queue.name, "Custom", "createQueue creates a named queue");
+const queuedItem = addItem(sid, "queue-backed task", false, "custom-queue");
+assertEqual(queuedItem.queue_id, "custom-queue", "queue-backed items inherit the requested queue");
+assertEqual(getPendingCount(sid, "custom-queue"), 1, "queue-aware pending counts are scoped by queue");
+const por = attachItemPorContext({ itemId: queuedItem.id, porId: "por-1", metadata: { source: "test" } });
+assertEqual(por.por_id, "por-1", "attachItemPorContext stores an item POR record");
+const roundTrip = getItemPorContext(queuedItem.id);
+assertEqual(roundTrip.metadata.source, "test", "POR context metadata round-trips through storage");
+const removedPor = removeItemPorContext(queuedItem.id);
+assertEqual(removedPor.por_id, "por-1", "removeItemPorContext returns the removed POR context");
+assertEqual(getItemPorContext(queuedItem.id), null, "removeItemPorContext clears the stored POR context");
+
+const queuedItemRow = db.prepare("SELECT queue_id FROM items WHERE id = ?").get(queuedItem.id);
+assertEqual(queuedItemRow.queue_id, "custom-queue", "queue-backed items get their queue_id persisted");
+
+const porPayload = { kind: "por", id: "por-1" };
+db.prepare("UPDATE items SET por_json = ? WHERE id = ?").run(JSON.stringify(porPayload), queuedItem.id);
+const storedPor = db.prepare("SELECT por_json FROM items WHERE id = ?").get(queuedItem.id).por_json;
+assertEqual(JSON.parse(storedPor).id, porPayload.id, "POR attachment round-trips through item storage");
 
 done("test-items");

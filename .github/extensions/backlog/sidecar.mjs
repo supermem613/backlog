@@ -21,10 +21,9 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as net_module from "node:net";
 
-import { db, BACKLOG_DIR, getSetting, setSetting, setSessionLabel, getSessionLabel } from "./db.mjs";
+import { db, BACKLOG_DIR, setSessionLabel, getSessionLabel, getItemPorContext } from "./db.mjs";
 import {
   addItem,
-  getLatestItemContext,
   moveTop,
   moveUp,
   moveDown,
@@ -35,6 +34,7 @@ import {
 } from "./items.mjs";
 import { makeEngagePrompt } from "./prompt.mjs";
 import { getRuntimeInfo } from "./doctor.mjs";
+import { listHumanDecisions } from "./review-channel.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -129,14 +129,105 @@ export function setSessionRef(ref)     { sidecarState.sessionRef = ref; }
 
 export function getCurrentItems(sessionId) {
   return db.prepare(`
-    SELECT id, description, position, created_at, source, friction_category,
-           friction_tool, occurrence_count, first_seen_at, last_seen_at
+    SELECT id, description, position, queue_id, priority, status, created_at
     FROM items
-    WHERE session_id = ? AND status = ?
+    WHERE session_id = ? AND status = ? AND (queue_id = ? OR queue_id IS NULL)
     ORDER BY position
-  `).all(sessionId, "pending").map((item) => ({
-    ...item,
-    latest_context: item.source === "friction" ? getLatestItemContext(item.id) : null,
+  `).all(sessionId, "pending", "inbox");
+}
+
+function summarizePorContext(context) {
+  if (!context) return null;
+  const parts = [];
+  if (context.por_id) parts.push(`por:${context.por_id}`);
+  if (context.kind && context.kind !== "por") parts.push(context.kind);
+  const metadata = context.metadata && typeof context.metadata === "object" ? context.metadata : {};
+  const metadataKeys = Object.keys(metadata).filter((key) => metadata[key] !== undefined && metadata[key] !== null && metadata[key] !== "");
+  if (metadataKeys.length > 0) {
+    const sample = metadataKeys.slice(0, 2).map((key) => `${key}:${String(metadata[key]).slice(0, 24)}`).join(", ");
+    parts.push(sample);
+  }
+  return parts.length > 0 ? parts.join(" • ") : null;
+}
+
+function buildQueueSnapshot(sessions) {
+  const queueRows = db.prepare("SELECT id, name, description, metadata_json FROM queues ORDER BY name, created_at").all();
+  const rows = db.prepare(`
+    SELECT
+      i.rowid AS item_rowid,
+      i.id,
+      i.session_id,
+      i.description,
+      i.position,
+      i.priority,
+      i.status,
+      i.created_at,
+      i.queue_id,
+      q.rowid AS queue_rowid,
+      q.name AS queue_name,
+      q.description AS queue_description,
+      q.metadata_json AS queue_metadata_json
+    FROM items i
+    LEFT JOIN queues q ON q.id = i.queue_id
+    WHERE i.status = ?
+    ORDER BY COALESCE(q.name, 'Inbox'), i.position
+  `).all("pending");
+  const sessionsById = new Map(sessions.map((session) => [session.id, session]));
+  const queues = new Map();
+
+  function ensureQueue(id, name, description, metadata) {
+    if (!queues.has(id)) {
+      queues.set(id, { id, name: name || "Inbox", description: description || null, metadata: metadata || {}, items: [], itemCount: 0 });
+    }
+    return queues.get(id);
+  }
+
+  for (const row of queueRows) {
+    ensureQueue(row.id, row.name || "Inbox", row.description, row.metadata_json ? JSON.parse(row.metadata_json) : {});
+  }
+
+  for (const row of rows) {
+    const session = sessionsById.get(row.session_id) || {
+      id: row.session_id,
+      label: row.session_id.slice(0, 8),
+      live: false,
+      state: "offline",
+    };
+    const queueId = row.queue_id;
+    if (!queueId) continue;
+    if (typeof row.queue_rowid === "number" && typeof row.item_rowid === "number" && row.queue_rowid >= row.item_rowid) continue;
+    const queue = ensureQueue(queueId, row.queue_name || (queueId === "inbox" ? "Inbox" : queueId), row.queue_description, row.queue_metadata_json ? JSON.parse(row.queue_metadata_json) : {});
+    const porContext = getItemPorContext(row.id);
+    queue.items.push({
+      id: row.id,
+      session_id: row.session_id,
+      session_label: session.label,
+      session_live: !!session.live,
+      session_state: session.state,
+      description: row.description,
+      position: row.position,
+      queue_id: queueId,
+      priority: row.priority,
+      status: row.status,
+      created_at: row.created_at,
+      por_context: porContext ? { porId: porContext.por_id, kind: porContext.kind, metadata: porContext.metadata } : null,
+      por_context_summary: summarizePorContext(porContext),
+    });
+    queue.itemCount += 1;
+  }
+
+  for (const queue of queues.values()) {
+    queue.items.sort((a, b) => {
+      if (b.position !== a.position) return b.position - a.position;
+      const left = a.created_at || "";
+      const right = b.created_at || "";
+      return right.localeCompare(left);
+    });
+  }
+
+  return [...queues.values()].map((queue) => ({
+    ...queue,
+    items: queue.items,
   }));
 }
 
@@ -240,8 +331,10 @@ export function buildSnapshot(activeSessionIdHint) {
   return {
     type: "snapshot",
     activeSessionId: activeSessionIdHint || sessions.find(s => s.live)?.id || sessions[0]?.id || null,
-    frictionCaptureEnabled: getSetting("friction_capture_enabled", "1") !== "0",
+    activeQueueId: null,
     runtime: getRuntimeInfo(),
+    decisions: listHumanDecisions(),
+    queues: buildQueueSnapshot(sessions),
     sessions,
   };
 }
@@ -569,17 +662,6 @@ export async function handleHttp(req, res) {
     res.end(JSON.stringify({ ok: true, enabled: sidecarState.burndown.has(sid) }));
     return;
   }
-  if (req.method === "POST" && url.pathname === "/api/friction") {
-    let body;
-    try { body = await readJsonBody(req); }
-    catch { res.writeHead(400); res.end("bad body"); return; }
-    if (body.token !== sidecarState.token) { res.writeHead(401); res.end("unauthorized"); return; }
-    setSetting("friction_capture_enabled", body.enabled ? "1" : "0");
-    ownerRefresh();
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, enabled: getSetting("friction_capture_enabled", "1") !== "0" }));
-    return;
-  }
   if (req.method === "POST" && url.pathname === "/api/mutate") {
     deferViewerCloseUntilResponseFinishes(res);
     let body;
@@ -589,12 +671,13 @@ export async function handleHttp(req, res) {
     const sid = body.sessionId;
     if (!sid) { res.writeHead(400); res.end("missing sessionId"); return; }
     let result = null;
+    const queueId = body.queueId || null;
     switch (body.op) {
-      case "add":    result = addItem(sid, body.description || "", false); break;
-      case "up":     result = moveUp(sid, body.id); break;
-      case "down":   result = moveDown(sid, body.id); break;
-      case "edit":   result = editItem(sid, body.id, body.description); break;
-      case "delete": result = removeItem(sid, body.id); break;
+      case "add": result = addItem(sid, body.description || "", false, queueId); break;
+      case "up":     result = moveUp(sid, body.id, queueId); break;
+      case "down":   result = moveDown(sid, body.id, queueId); break;
+      case "edit":   result = editItem(sid, body.id, body.description, queueId); break;
+      case "delete": result = removeItem(sid, body.id, queueId); break;
       default: res.writeHead(400); res.end("bad op"); return;
     }
     if (!result) { res.writeHead(400); res.end("invalid request"); return; }
@@ -963,7 +1046,7 @@ function startClientHeartbeatPoll() {
 // ---- Election + boot ----
 
 // Try to bind the shared port. Win → owner. EADDRINUSE → client. Anything
-// else → log and stay in null role (no viewer features for this session).
+// else → log and stay in null role for this session.
 // Guarded against re-entry during the listen() async window so we don't
 // spawn two competing election servers in the same process.
 export function tryStartSidecar() {
