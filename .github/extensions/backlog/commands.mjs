@@ -21,6 +21,7 @@ import {
   showViewer,
   tryStartSidecar,
 } from "./sidecar.mjs";
+import { basename, resolve } from "node:path";
 import { formatDoctorReport } from "./doctor.mjs";
 import { exportBacklogBackup, restoreBacklogBackup } from "./backup.mjs";
 import {
@@ -30,10 +31,19 @@ import {
   listHumanDecisions,
   rejectItemReview,
 } from "./review-channel.mjs";
-import { describeBacklogStatus, resolveItemCommandContext } from "./queue-resolver.mjs";
+import { bindQueueScope, describeBacklogStatus, resolveItemCommandContext } from "./queue-resolver.mjs";
 import { getSlashCommandNames } from "./command-registry.mjs";
+import { resolveWorktreeOrigin } from "./vcs-provider.mjs";
 
 const DEFAULT_QUEUE_ID = "inbox";
+
+function queueIdFromScope(scope) {
+  return basename(scope)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "backlog";
+}
 
 export function parseBacklogCommand(rawText) {
   const parts = (rawText || "").trim().split(/\s+/);
@@ -134,6 +144,29 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
     }
     case "status": {
       return describeBacklogStatus({ sessionId, cwd, queues: listQueues() });
+    }
+    case "init": {
+      if (!cwd) return "Error: Workspace directory required. Usage: /backlog init [queue-id] [name]";
+      const workspace = resolve(cwd);
+      const scope = resolveWorktreeOrigin(workspace) || workspace;
+      const queueId = args[0] || queueIdFromScope(scope);
+      const name = args.slice(1).join(" ").trim() || queueId;
+      const beforeQueueExists = listQueues().some((queue) => queue.id === queueId);
+      const queue = createQueue({ id: queueId, name });
+      const beforeBindingExists = queue.bindings?.some((binding) => binding.scope === scope) || false;
+      const binding = bindQueueScope(queue, scope, { preferred: true });
+      const status = describeBacklogStatus({ sessionId, cwd: workspace, queues: listQueues() });
+      return {
+        message: `Initialized backlog queue '${queue.name}' [id: ${queue.id}] for ${scope}`,
+        queueId: queue.id,
+        queueName: queue.name,
+        workspace,
+        scope,
+        createdQueue: !beforeQueueExists,
+        createdBinding: !beforeBindingExists,
+        binding,
+        status,
+      };
     }
     case "sessions": {
       const sessions = listSessions();

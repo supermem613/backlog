@@ -1,7 +1,8 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { db } from "../db.mjs";
+import { db, listQueueScopes } from "../db.mjs";
 import { parseBacklogCommand, handleBacklogCommand } from "../commands.mjs";
 import { addItem } from "../items.mjs";
 import { sandboxDir } from "./harness.mjs";
@@ -21,6 +22,8 @@ assertEqual(p3.cmd, "list", "empty input defaults to list");
 
 const p4 = parseBacklogCommand("doctor");
 assertEqual(p4.cmd, "doctor", "doctor command parsed");
+const p5 = parseBacklogCommand("init");
+assertEqual(p5.cmd, "init", "init command parsed");
 
 // Dispatcher — exercise a couple of command paths against the test DB
 const sid = "test-cmd-session";
@@ -37,6 +40,19 @@ const queueCreateOut = await handleBacklogCommand(sid, "queue create inbox");
 assert(/Created queue/.test(queueCreateOut), `queue create command creates an explicit queue, got: ${queueCreateOut}`);
 const queueTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'queues'").get();
 assert(queueTable, "queue table exists for queue-backed backlog items");
+const initScope = join(sandboxDir, "soda");
+mkdirSync(join(initScope, ".git"), { recursive: true });
+const initOut = await handleBacklogCommand(sid, "init", { cwd: initScope });
+assertEqual(initOut.queueId, "soda", "init derives the queue id from the workspace directory");
+assertEqual(initOut.createdQueue, true, "init creates the queue on first run");
+assertEqual(initOut.createdBinding, true, "init creates the workspace binding on first run");
+assertEqual(initOut.status.state, "resolved", "init returns a resolved status descriptor");
+assertEqual(initOut.status.matchedBy, "exact", "init binds the current workspace exactly");
+assertEqual(listQueueScopes("soda").length, 1, "init persists one binding for the workspace");
+const initAgainOut = await handleBacklogCommand(sid, "init", { cwd: initScope });
+assertEqual(initAgainOut.createdQueue, false, "init reuses an existing queue");
+assertEqual(initAgainOut.createdBinding, false, "init reuses an existing binding");
+assertEqual(listQueueScopes("soda").length, 1, "init is idempotent for the same workspace");
 const queuedItem = addItem(sid, "queue default");
 const queuedItemRow = db.prepare("SELECT queue_id FROM items WHERE id = ?").get(queuedItem.id);
 assertEqual(queuedItemRow.queue_id, "inbox", "new items default to the Inbox queue");

@@ -74,6 +74,12 @@ const commandDefinitions = [
     usage: "/backlog status",
   },
   {
+    name: "init",
+    scope: "slash",
+    description: "Create or reuse a queue for the current workspace and bind it.",
+    usage: "/backlog init [queue-id] [name]",
+  },
+  {
     name: "sessions",
     scope: "slash",
     description: "List backlog sessions.",

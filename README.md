@@ -85,6 +85,7 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 /backlog next                       # show the top item
 /backlog pending                    # count of pending items
 /backlog status                     # inspect queue binding for this workspace
+/backlog init [queue-id] [name]     # create or bind a queue for this workspace
 /backlog done <id-or-position>      # mark complete
 /backlog remove <id-or-position>    # delete without completing
 /backlog top <id-or-position>       # move to position 1
@@ -114,6 +115,8 @@ Items can be referenced by short ID (e.g. `t1a2b3`) or by position number (e.g. 
 
 `/backlog status` is read-only. It reports the selected `queueId`, queue bindings, item counts, match type (`exact`, `worktree-origin`, `ancestor`, or `default`), and any ambiguous candidates. Use it to confirm what queue Copilot CLI will operate on before adding, draining, or starting work.
 
+Run `/backlog init` or `backlog init` from a repo directory to create or reuse a queue named after that directory and bind it. For `C:\Users\marcusm\repos\soda`, the single command is `backlog init`, which creates queue `soda` and binds that local repo path. You can override the id and name with `backlog init <queue-id> <name>`.
+
 When no queue id is passed to `/backlog loop start` or `/backlog loop stop`, backlog uses the same workspace resolver as item operations. Explicit queue ids still win.
 
 `/backlog doctor` reports the loaded extension path, package version, git commit, storage status, and runs an item delete smoke check. Use it after upgrades or extension reloads to confirm the running extension is the one you expect.
@@ -124,6 +127,7 @@ The package also installs a `backlog` CLI that mirrors the slash command surface
 
 ```
 backlog status --json
+backlog init
 backlog add "write the next test" --cwd C:\path\to\repo
 backlog loop start --cwd C:\path\to\repo
 backlog schema --json

@@ -12,8 +12,10 @@ import { parseBacklogCommand, handleBacklogCommand } from "../commands.mjs";
 import { runCli } from "../cli.mjs";
 
 const tempDir = mkdtempSync(join(tmpdir(), "cli-parity-"));
+const initDir = mkdtempSync(join(tmpdir(), "cli-init-"));
 process.on("exit", () => {
   try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  try { rmSync(initDir, { recursive: true, force: true }); } catch {}
 });
 
 const queue = createQueue({ id: "queue-cli-parity", name: "CLI Parity Queue" });
@@ -73,6 +75,8 @@ if (statusResult.error) {
   }
   const queueParsed = parseBacklogCommand("queue list");
   assertEqual(queueParsed.cmd, "queue", "queue subcommands should share the queue handler");
+  const initParsed = parseBacklogCommand("init");
+  assertEqual(initParsed.cmd, "init", "init should share the queue binding handler");
   const loopParsed = parseBacklogCommand("loop status");
   assertEqual(loopParsed.cmd, "loop", "loop subcommands should share the loop handler");
   const doctorParsed = parseBacklogCommand("doctor");
@@ -80,6 +84,24 @@ if (statusResult.error) {
 
   const sharedHandlerCheck = await handleBacklogCommand(sessionId, "doctor");
   assert(typeof sharedHandlerCheck === "string", "shared slash handler should return a string response for doctor");
+
+  const initResult = spawnSync(process.execPath, [cliPath, "init", "cli-init-queue", "CLI Init Queue", "--cwd", initDir, "--db-dir", sandboxDir, "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(initResult.status, 0, "init command should exit 0");
+  let initEnvelope;
+  try {
+    initEnvelope = JSON.parse(initResult.stdout);
+  } catch (error) {
+    assert(false, `init stdout should be parseable JSON: ${error.message}`);
+  }
+  if (initEnvelope) {
+    assertEqual(initEnvelope.ok, true, "init envelope should report ok=true");
+    assertEqual(initEnvelope.command, "init", "init envelope should identify the command");
+    assertEqual(initEnvelope.data.queueId, "cli-init-queue", "init envelope should include the created queue id");
+    assertEqual(initEnvelope.data.status.state, "resolved", "init envelope should include resolved status");
+  }
 
   const originalExitCode = process.exitCode;
   const originalStdoutWrite = process.stdout.write;

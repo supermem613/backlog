@@ -111,6 +111,10 @@ function emitHumanResponse(envelope) {
     process.stdout.write(`${envelope.data.output}\n`);
     return;
   }
+  if (envelope.ok && envelope.data?.message) {
+    process.stdout.write(`${envelope.data.message}\n`);
+    return;
+  }
   if (envelope.ok && envelope.data && typeof envelope.data === "object" && !Array.isArray(envelope.data)) {
     const hasMeaningfulKeys = Object.keys(envelope.data).length > 0;
     if (hasMeaningfulKeys) {
