@@ -130,7 +130,7 @@ const commandDefinitions = [
   {
     name: "loop",
     scope: "slash",
-    description: "Control backlog loops.",
+    description: "Control backlog loops, resolving from the workspace when no queue is explicit.",
     usage: "/backlog loop start|stop|status [queue-id-or-name]",
   },
   {
