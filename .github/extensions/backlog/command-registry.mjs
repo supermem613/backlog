@@ -163,23 +163,21 @@ const toolDefinitions = [
   {
     name: "backlog_next",
     description: "Get the next pending backlog item. Call this after completing an item to check for more work.",
-    parameters: { type: "object", properties: {} },
+    parameters: {
+      type: "object",
+      properties: {
+        cwd: { type: "string", description: "Workspace directory to inspect" },
+      },
+    },
   },
   {
     name: "backlog_list",
     description: "List all pending backlog items for the current session.",
-    parameters: { type: "object", properties: {} },
-  },
-  {
-    name: "backlog_add",
-    description: "Add an item to the session backlog.",
     parameters: {
       type: "object",
       properties: {
-        description: { type: "string", description: "Task description" },
-        top: { type: "boolean", description: "Add as top priority" },
+        cwd: { type: "string", description: "Workspace directory to inspect" },
       },
-      required: ["description"],
     },
   },
   {
@@ -189,17 +187,7 @@ const toolDefinitions = [
       type: "object",
       properties: {
         ref: { type: "string", description: "Item ID or position number" },
-      },
-      required: ["ref"],
-    },
-  },
-  {
-    name: "backlog_remove",
-    description: "Remove a backlog item without completing it.",
-    parameters: {
-      type: "object",
-      properties: {
-        ref: { type: "string", description: "Item ID or position number" },
+        cwd: { type: "string", description: "Workspace directory to inspect" },
       },
       required: ["ref"],
     },

@@ -110,6 +110,36 @@ if (statusResult.error) {
     assertEqual(initEnvelope.data.status.state, "resolved", "init envelope should include resolved status");
   }
 
+  const cliAddResult = spawnSync(process.execPath, [cliPath, "add", "editable cli item", "--cwd", initDir, "--db-dir", sandboxDir, "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(cliAddResult.status, 0, "add command should exit 0 for edit parity setup");
+  let cliAddEnvelope;
+  try {
+    cliAddEnvelope = JSON.parse(cliAddResult.stdout);
+  } catch (error) {
+    assert(false, `add stdout should be parseable JSON: ${error.message}`);
+  }
+  const editableId = cliAddEnvelope?.data?.output?.match(/\[id: ([^\]]+)\]/)?.[1];
+  assert(editableId, `add output should include an editable id, got: ${cliAddEnvelope?.data?.output}`);
+  const cliEditResult = spawnSync(process.execPath, [cliPath, "edit", editableId || "missing", "edited cli item", "--cwd", initDir, "--db-dir", sandboxDir, "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(cliEditResult.status, 0, "edit command should exit 0");
+  let cliEditEnvelope;
+  try {
+    cliEditEnvelope = JSON.parse(cliEditResult.stdout);
+  } catch (error) {
+    assert(false, `edit stdout should be parseable JSON: ${error.message}`);
+  }
+  if (cliEditEnvelope) {
+    assertEqual(cliEditEnvelope.ok, true, "edit envelope should report ok=true");
+    assertEqual(cliEditEnvelope.command, "edit", "edit envelope should identify the command");
+    assert(/Updated 'edited cli item'/.test(cliEditEnvelope.data.output), "edit envelope should confirm the updated description");
+  }
+
   const originalExitCode = process.exitCode;
   const originalStdoutWrite = process.stdout.write;
   let unknownStdout = "";

@@ -5,7 +5,7 @@ import { db, createQueue, ensureSession } from "../db.mjs";
 import { handleBacklogCommand } from "../commands.mjs";
 import { bindQueueScope } from "../queue-resolver.mjs";
 import { createBacklogJoinConfig } from "../join-config.mjs";
-import { addItem, markDone, removeItem, getTopItem, getPendingCount } from "../items.mjs";
+import { markDone, getTopItem, getPendingCount } from "../items.mjs";
 import { sandboxDir } from "./harness.mjs";
 
 function assertResolutionBlock(result, label, expectedQueueId) {
@@ -65,17 +65,17 @@ const joinConfig = createBacklogJoinConfig({
   syncSidecarVisibility: () => {},
   ensureSession,
   getDb: () => db,
-  getTopItem: (sid) => getTopItem(sid),
-  getPendingCount: (sid) => getPendingCount(sid),
-  addItem: (sid, description, top) => addItem(sid, description, top),
-  markDone: (sid, ref) => markDone(sid, ref),
-  removeItem: (sid, ref) => removeItem(sid, ref),
+  getTopItem,
+  getPendingCount,
+  markDone,
   handleBacklogCommand,
 });
 
-const addTool = joinConfig.tools.find((tool) => tool.name === "backlog_add");
-const addToolOut = await addTool.handler({ description: "tool-bound-item", cwd: scopeA }, { sessionId });
-assertResolutionBlock(addToolOut, "backlog_add", queueA.id);
+assertEqual(
+  joinConfig.tools.map((tool) => tool.name).join(","),
+  "backlog_next,backlog_list,backlog_done,backlog_status",
+  "agent tools omit automatic add/edit/remove mutation surfaces",
+);
 
 const listTool = joinConfig.tools.find((tool) => tool.name === "backlog_list");
 const listToolOut = await listTool.handler({}, { sessionId, cwd: scopeB });
@@ -88,9 +88,5 @@ assertResolutionBlock(nextToolOut, "backlog_next", queueA.id);
 const doneTool = joinConfig.tools.find((tool) => tool.name === "backlog_done");
 const doneToolOut = await doneTool.handler({ ref: "1" }, { sessionId, cwd: scopeA });
 assertResolutionBlock(doneToolOut, "backlog_done", queueA.id);
-
-const removeTool = joinConfig.tools.find((tool) => tool.name === "backlog_remove");
-const removeToolOut = await removeTool.handler({ ref: "1" }, { sessionId, cwd: scopeA });
-assertResolutionBlock(removeToolOut, "backlog_remove", queueA.id);
 
 done("test-auto-bound-items");

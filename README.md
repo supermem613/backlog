@@ -141,12 +141,10 @@ The agent automatically gets these tools and uses them naturally:
 
 - `backlog_next` — fetch the top pending item; the agent calls this after completing a step to know what's next.
 - `backlog_list` — list all pending items.
-- `backlog_add` — append an item (handy when the user says "add this to the backlog" mid-conversation).
 - `backlog_done` — mark an item complete by id or position.
-- `backlog_remove` — drop an item without completing it.
 - `backlog_status` — inspect which queue is bound to the current workspace.
 
-Tools accept `cwd` when the agent needs to inspect or operate on a specific workspace. If no `cwd` is available, legacy session Inbox behavior is preserved. If a `cwd` is available but no queue binding resolves, item operations fail closed instead of silently using Inbox.
+Tools accept `cwd` when the agent needs to inspect or operate on a specific workspace. If no `cwd` is available, legacy session Inbox behavior is preserved. If a `cwd` is available but no queue binding resolves, item operations fail closed instead of silently using Inbox. Add, edit, and remove stay explicit user actions through `/backlog ...` or `backlog ...`, not automatic agent-callable tools.
 
 ### Permission prompts
 

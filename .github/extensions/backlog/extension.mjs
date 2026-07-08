@@ -23,9 +23,7 @@ import {
   getSessionLabel,
 } from "./db.mjs";
 import {
-  addItem,
   markDone,
-  removeItem,
   getTopItem,
   getPendingCount,
 } from "./items.mjs";
@@ -84,9 +82,7 @@ const joinConfig = createBacklogJoinConfig({
   getDb: () => db,
   getTopItem,
   getPendingCount,
-  addItem,
   markDone,
-  removeItem,
   handleBacklogCommand: createExtensionCommandHandler({
     handleBacklogCommand,
     getLoopRuntime: () => loopRuntime,

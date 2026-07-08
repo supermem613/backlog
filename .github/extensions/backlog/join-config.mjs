@@ -53,9 +53,7 @@ export function createBacklogJoinConfig({
   getDb,
   getTopItem,
   getPendingCount,
-  addItem,
   markDone,
-  removeItem,
   handleBacklogCommand,
 }) {
   const backlogCommand = getCommandDefinition("backlog");
@@ -117,19 +115,6 @@ export function createBacklogJoinConfig({
         },
       },
       {
-        ...toolMetadata["backlog_add"],
-        handler: async (args, invocation) => {
-          const sid = invocation?.sessionId || getActiveSessionId() || "default";
-          const cwd = getInvocationCwd(args, invocation);
-          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd, defaultQueueId: "inbox" });
-          if (queueContext.error) {
-            return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
-          }
-          const { id, position } = addItem(sid, args.description, args.top || false, queueContext.queueId);
-          return { message: `Added: '${args.description}' [id: ${id}] (position ${position})`, resolution: queueContext.resolution, queueId: queueContext.queueId, id, position };
-        },
-      },
-      {
         ...toolMetadata["backlog_done"],
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
@@ -143,22 +128,6 @@ export function createBacklogJoinConfig({
             return { message: `Error: Item '${args.ref}' not found`, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
           }
           return { message: `Marked '${item.description}' as done`, resolution: queueContext.resolution, queueId: queueContext.queueId, item };
-        },
-      },
-      {
-        ...toolMetadata["backlog_remove"],
-        handler: async (args, invocation) => {
-          const sid = invocation?.sessionId || getActiveSessionId() || "default";
-          const cwd = getInvocationCwd(args, invocation);
-          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd, defaultQueueId: "inbox" });
-          if (queueContext.error) {
-            return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
-          }
-          const item = removeItem(sid, args.ref, queueContext.queueId);
-          if (!item) {
-            return { message: `Error: Item '${args.ref}' not found`, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
-          }
-          return { message: `Removed '${item.description}'`, resolution: queueContext.resolution, queueId: queueContext.queueId, item };
         },
       },
       {

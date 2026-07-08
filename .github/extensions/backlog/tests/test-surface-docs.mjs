@@ -33,6 +33,7 @@ assertEqual(
 
 for (const tool of getToolDefinitions()) {
   assert(new RegExp(`^- \`${tool.name}\``, "m").test(toolBlock), `README documents ${tool.name}`);
+  assert(tool.parameters.properties.cwd, `${tool.name} schema exposes cwd for workspace queue resolution`);
 }
 
 done("test-surface-docs");
