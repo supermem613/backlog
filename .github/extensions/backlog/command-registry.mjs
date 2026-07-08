@@ -228,12 +228,16 @@ export function getSlashCommandDefinitions() {
   return getCommandDefinitions().filter((command) => command.scope === "slash");
 }
 
+export function getSharedCommandDefinitions() {
+  return getSlashCommandDefinitions().filter((command) => command.name !== "backlog");
+}
+
 export function getCommandDefinition(name) {
   return getCommandDefinitions().find((command) => command.name === name) || null;
 }
 
 export function getSlashCommandNames() {
-  return getSlashCommandDefinitions().map((command) => command.name);
+  return getSharedCommandDefinitions().map((command) => command.name);
 }
 
 export function getCliCommandNames() {
@@ -247,7 +251,7 @@ export function formatCommandHelp(commandName = null) {
   }
 
   const lines = ["Usage: backlog <command> [args]", "", "Commands:"]; 
-  for (const entry of getSlashCommandDefinitions()) {
+  for (const entry of getSharedCommandDefinitions()) {
     lines.push(`  ${entry.name.padEnd(10)} ${entry.description}`);
   }
   lines.push("", "CLI helpers:");

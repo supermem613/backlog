@@ -9,6 +9,7 @@ import { createQueue, ensureSession } from "../db.mjs";
 import { addItem, markDone } from "../items.mjs";
 import { bindQueueScope, describeBacklogStatus } from "../queue-resolver.mjs";
 import { parseBacklogCommand, handleBacklogCommand } from "../commands.mjs";
+import { getCommandDefinition, getSlashCommandNames } from "../command-registry.mjs";
 import { runCli } from "../cli.mjs";
 
 const tempDir = mkdtempSync(join(tmpdir(), "cli-parity-"));
@@ -81,6 +82,12 @@ if (statusResult.error) {
   assertEqual(loopParsed.cmd, "loop", "loop subcommands should share the loop handler");
   const doctorParsed = parseBacklogCommand("doctor");
   assertEqual(doctorParsed.cmd, "doctor", "doctor should share the shared slash handler");
+  assert(getCommandDefinition("backlog"), "extension root /backlog command metadata stays registered");
+  assertEqual(
+    getSlashCommandNames().join(","),
+    "add,list,done,remove,edit,top,up,down,next,pending,status,init,sessions,prune,clear,queue,show,approve,review,backup,restore,loop,doctor",
+    "CLI-visible shared commands match the runnable slash subcommand surface",
+  );
 
   const sharedHandlerCheck = await handleBacklogCommand(sessionId, "doctor");
   assert(typeof sharedHandlerCheck === "string", "shared slash handler should return a string response for doctor");
@@ -127,6 +134,7 @@ if (statusResult.error) {
   if (unknownEnvelope) {
     assertEqual(unknownEnvelope.ok, false, "unknown CLI commands should report ok=false");
     assertEqual(unknownEnvelope.command, "frobnicate", "unknown CLI commands should identify the attempted command");
+    assertEqual(unknownEnvelope.data.knownCommands.join(","), getSlashCommandNames().join(","), "unknown CLI command output lists the runnable slash subcommands");
   }
 }
 

@@ -82,16 +82,16 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 /backlog add <description>          # append a new item
 /backlog add --top <description>    # add as position 1
 /backlog list                       # show pending items
+/backlog done <id-or-position>      # mark complete
+/backlog remove <id-or-position>    # delete without completing
+/backlog edit <id-or-position> <new-description>
+/backlog top <id-or-position>       # move to position 1
+/backlog up <id-or-position>        # move up one position
+/backlog down <id-or-position>      # move down one position
 /backlog next                       # show the top item
 /backlog pending                    # count of pending items
 /backlog status                     # inspect queue binding for this workspace
 /backlog init [queue-id] [name]     # create or bind a queue for this workspace
-/backlog done <id-or-position>      # mark complete
-/backlog remove <id-or-position>    # delete without completing
-/backlog top <id-or-position>       # move to position 1
-/backlog up <id-or-position>        # move up one position
-/backlog down <id-or-position>      # move down one position
-/backlog edit <id-or-position> <new-description>
 /backlog sessions                   # list all sessions with pending items
 /backlog prune [days]               # drop sessions not accessed in N days (default 7)
 /backlog clear                      # delete every item in this session

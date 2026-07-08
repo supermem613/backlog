@@ -43,6 +43,7 @@ import {
   makeSessionEndBanner,
 } from "./prompt.mjs";
 import { handleBacklogCommand } from "./commands.mjs";
+import { createExtensionCommandHandler } from "./extension-command-handler.mjs";
 import { createLoopRuntime } from "./loop-runtime.mjs";
 import {
   assertDeprivilegedJoinConfig,
@@ -86,7 +87,10 @@ const joinConfig = createBacklogJoinConfig({
   addItem,
   markDone,
   removeItem,
-  handleBacklogCommand: (sid, rawText) => handleBacklogCommand(sid, rawText, { loopRuntime }),
+  handleBacklogCommand: createExtensionCommandHandler({
+    handleBacklogCommand,
+    getLoopRuntime: () => loopRuntime,
+  }),
 });
 assertDeprivilegedJoinConfig(joinConfig);
 
