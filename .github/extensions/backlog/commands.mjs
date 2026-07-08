@@ -236,24 +236,35 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
     case "loop": {
       if (!loopRuntime) return "Error: Backlog loop runtime is not available";
       const sub = (args[0] || "status").toLowerCase();
-      const queueRef = args[1];
+      const explicitQueueRef = args[1];
+      const resolveLoopQueueRef = () => {
+        if (explicitQueueRef) return { queueRef: explicitQueueRef, error: null, matchedBy: "explicit" };
+        const queueContext = resolveQueueForItemOps();
+        if (queueContext.error) return { queueRef: null, error: queueContext.error, matchedBy: queueContext.resolution?.matchedBy };
+        return { queueRef: queueContext.queueId, error: null, matchedBy: queueContext.resolution?.matchedBy };
+      };
       try {
         if (sub === "start") {
-          if (!queueRef) return "Error: Queue id or name required. Usage: /backlog loop start <queue-id-or-name>";
-          const out = await loopRuntime.start(queueRef);
+          const queueTarget = resolveLoopQueueRef();
+          if (queueTarget.error) return queueTarget.error;
+          if (!queueTarget.queueRef) return "Error: Queue id or name required. Usage: /backlog loop start <queue-id-or-name>";
+          const out = await loopRuntime.start(queueTarget.queueRef);
           if (out.reason === "loop_already_active") {
             return "Error: Another backlog loop is already active in this session";
           }
+          const suffix = explicitQueueRef ? "" : ` from ${queueTarget.matchedBy || "resolved"} binding`;
           return out.started
-            ? `Backlog loop started for queue '${queueRef}'`
-            : `Backlog loop already running for queue '${queueRef}'`;
+            ? `Backlog loop started for queue '${queueTarget.queueRef}'${suffix}`
+            : `Backlog loop already running for queue '${queueTarget.queueRef}'`;
         }
         if (sub === "stop") {
-          if (!queueRef) return "Error: Queue id or name required. Usage: /backlog loop stop <queue-id-or-name>";
-          const out = await loopRuntime.stop(queueRef);
+          const queueTarget = resolveLoopQueueRef();
+          if (queueTarget.error) return queueTarget.error;
+          if (!queueTarget.queueRef) return "Error: Queue id or name required. Usage: /backlog loop stop <queue-id-or-name>";
+          const out = await loopRuntime.stop(queueTarget.queueRef);
           return out.stopped
-            ? `Backlog loop stopped for queue '${queueRef}'`
-            : `Backlog loop is not running for queue '${queueRef}'`;
+            ? `Backlog loop stopped for queue '${queueTarget.queueRef}'`
+            : `Backlog loop is not running for queue '${queueTarget.queueRef}'`;
         }
         if (sub === "status") {
           const running = loopRuntime.list();
