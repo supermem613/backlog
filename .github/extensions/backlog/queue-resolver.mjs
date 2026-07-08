@@ -1,5 +1,5 @@
 import { relative, resolve } from "node:path";
-import { bindQueueScope as bindQueueScopeDb, listQueueScopes as listQueueScopesDb } from "./db.mjs";
+import { bindQueueScope as bindQueueScopeDb, db, listQueues, listQueueScopes as listQueueScopesDb } from "./db.mjs";
 import { resolveWorktreeOrigin } from "./vcs-provider.mjs";
 
 function normalizePath(value) {
@@ -20,6 +20,10 @@ function getQueueBindings(queue) {
   if (Array.isArray(queue.bindings)) return queue.bindings;
   const queueId = queue.id;
   return queueId ? listQueueScopesDb(queueId) : [];
+}
+
+function normalizeStatusValue(value) {
+  return String(value || "").trim();
 }
 
 function buildCandidate(queue, binding, matchedBy) {
@@ -118,4 +122,61 @@ export function resolveQueueForCwd(cwd, { queues = [], origin = null } = {}) {
       worktreeOrigin: origin,
     },
   });
+}
+
+function getItemCount(sessionId, queueId, status) {
+  const normalizedStatus = normalizeStatusValue(status);
+  if (!sessionId || !queueId) return 0;
+  if (!normalizedStatus) {
+    return db.prepare(
+      "SELECT COUNT(*) as count FROM items WHERE session_id = ? AND queue_id = ?"
+    ).get(sessionId, queueId).count;
+  }
+  return db.prepare(
+    "SELECT COUNT(*) as count FROM items WHERE session_id = ? AND queue_id = ? AND status = ?"
+  ).get(sessionId, queueId, normalizedStatus).count;
+}
+
+export function describeBacklogStatus({ sessionId, cwd, queues = null, origin = null, worktreeEvidence = {} } = {}) {
+  const normalizedCwd = normalizePath(cwd);
+  const queueList = Array.isArray(queues) ? queues : (Array.isArray(worktreeEvidence.queues) ? worktreeEvidence.queues : listQueues());
+  const evidence = {
+    ...worktreeEvidence,
+    queues: queueList,
+    origin,
+    worktreeOrigin: origin ?? worktreeEvidence.worktreeOrigin ?? worktreeEvidence.origin ?? null,
+  };
+  const resolution = resolveQueue({ cwd: normalizedCwd, worktreeEvidence: evidence });
+  const totalItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(sessionId, resolution.queueId) : 0;
+  const pendingItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(sessionId, resolution.queueId, "pending") : 0;
+  const doneItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(sessionId, resolution.queueId, "done") : 0;
+  const itemCounts = {
+    pending: totalItems,
+    done: doneItems,
+    pendingItems,
+  };
+  const queueSummary = resolution.state === "resolved" && resolution.queue
+    ? {
+        id: resolution.queue.id,
+        name: resolution.queue.name,
+        description: resolution.queue.description || null,
+      }
+    : null;
+  const normalizedOrigin = resolveWorktreeOrigin(normalizedCwd, evidence);
+  return {
+    state: resolution.state,
+    queueId: resolution.queueId,
+    queueSummary,
+    matchedBy: resolution.matchedBy,
+    canonicalScope: normalizedCwd,
+    candidates: resolution.candidates || [],
+    itemCounts,
+    createdItem: false,
+    worktreeEvidence: {
+      cwd: normalizedCwd,
+      origin: normalizedOrigin,
+      queueCount: queueList.length,
+    },
+    resolution,
+  };
 }

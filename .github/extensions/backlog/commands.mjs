@@ -30,6 +30,7 @@ import {
   listHumanDecisions,
   rejectItemReview,
 } from "./review-channel.mjs";
+import { describeBacklogStatus } from "./queue-resolver.mjs";
 
 const DEFAULT_QUEUE_ID = "inbox";
 
@@ -46,7 +47,7 @@ export function parseBacklogCommand(rawText) {
   return { cmd, args, isTop };
 }
 
-export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = null } = {}) {
+export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = null, cwd = null } = {}) {
   const { cmd, args, isTop } = parseBacklogCommand(rawText);
 
   switch (cmd) {
@@ -104,6 +105,9 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
     }
     case "pending": {
       return String(getPendingCount(sessionId, DEFAULT_QUEUE_ID));
+    }
+    case "status": {
+      return describeBacklogStatus({ sessionId, cwd, queues: listQueues() });
     }
     case "sessions": {
       const sessions = listSessions();
@@ -237,6 +241,6 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
       return formatDoctorReport();
     }
     default:
-      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, edit, top, up, down, next, pending, sessions, prune, clear, queue, show, approve, review, backup, restore, loop, doctor`;
+      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, edit, top, up, down, next, pending, status, sessions, prune, clear, queue, show, approve, review, backup, restore, loop, doctor`;
   }
 }
