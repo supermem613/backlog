@@ -124,6 +124,95 @@ export function resolveQueueForCwd(cwd, { queues = [], origin = null } = {}) {
   });
 }
 
+function buildDefaultResolution(defaultQueueId) {
+  return {
+    state: "resolved",
+    matchedBy: "default",
+    queueId: defaultQueueId,
+    queue: undefined,
+    binding: undefined,
+    candidates: [defaultQueueId],
+  };
+}
+
+function formatAmbiguousResolutionError(resolution, cwd) {
+  const candidates = Array.isArray(resolution?.candidates) && resolution.candidates.length > 0
+    ? resolution.candidates.join(", ")
+    : "(none)";
+  const scope = cwd ? `'${cwd}'` : "the current workspace";
+  return `Ambiguous queue resolution for ${scope}. Candidates: ${candidates}`;
+}
+
+function formatUnboundResolutionError(cwd) {
+  const scope = cwd ? `'${cwd}'` : "the current workspace";
+  return `Unbound queue resolution for ${scope}. Bind a queue scope before operating on backlog items.`;
+}
+
+export function resolveItemCommandContext({
+  cwd = null,
+  queues = null,
+  origin = null,
+  worktreeEvidence = {},
+  sessionId = null,
+  defaultQueueId = "inbox",
+} = {}) {
+  const queueList = Array.isArray(queues) ? queues : (Array.isArray(worktreeEvidence.queues) ? worktreeEvidence.queues : listQueues());
+  const evidence = {
+    ...worktreeEvidence,
+    queues: queueList,
+    origin,
+    worktreeOrigin: origin ?? worktreeEvidence.worktreeOrigin ?? worktreeEvidence.origin ?? null,
+  };
+  const normalizedCwd = cwd ? normalizePath(cwd) : null;
+
+  if (!normalizedCwd) {
+    return {
+      sessionId,
+      cwd: normalizedCwd,
+      queueId: defaultQueueId,
+      queue: undefined,
+      resolution: buildDefaultResolution(defaultQueueId),
+      error: null,
+      candidates: [defaultQueueId],
+    };
+  }
+
+  const resolution = resolveQueue({ cwd: normalizedCwd, worktreeEvidence: evidence });
+  if (resolution.state === "resolved") {
+    return {
+      sessionId,
+      cwd: normalizedCwd,
+      queueId: resolution.queueId || defaultQueueId,
+      queue: resolution.queue || undefined,
+      resolution,
+      error: null,
+      candidates: resolution.candidates || [],
+    };
+  }
+
+  if (resolution.state === "ambiguous") {
+    return {
+      sessionId,
+      cwd: normalizedCwd,
+      queueId: undefined,
+      queue: undefined,
+      resolution,
+      error: formatAmbiguousResolutionError(resolution, normalizedCwd),
+      candidates: resolution.candidates || [],
+    };
+  }
+
+  return {
+    sessionId,
+    cwd: normalizedCwd,
+    queueId: undefined,
+    queue: undefined,
+    resolution,
+    error: formatUnboundResolutionError(normalizedCwd),
+    candidates: [],
+  };
+}
+
 function getItemCount(sessionId, queueId, status) {
   const normalizedStatus = normalizeStatusValue(status);
   if (!sessionId || !queueId) return 0;

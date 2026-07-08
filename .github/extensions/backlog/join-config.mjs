@@ -1,3 +1,5 @@
+import { resolveItemCommandContext } from "./queue-resolver.mjs";
+
 const ELEVATING_HANDLER_KEYS = [
   "onPermissionRequest",
   "onUserInput",
@@ -9,6 +11,10 @@ const ELEVATING_HANDLER_KEYS = [
   "onAutoModeSwitch",
   "onAutoModeSwitchRequest",
 ];
+
+function getInvocationCwd(args, invocation) {
+  return args?.cwd || invocation?.cwd || invocation?.context?.cwd || null;
+}
 
 export function describeJoinPrivilege(config) {
   const elevatedHandlers = ELEVATING_HANDLER_KEYS.filter((key) => config[key] !== undefined);
@@ -70,30 +76,44 @@ export function createBacklogJoinConfig({
         name: "backlog_next",
         description: "Get the next pending backlog item. Call this after completing an item to check for more work.",
         parameters: { type: "object", properties: {} },
-        handler: async (_args, invocation) => {
+        handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
-          const item = getTopItem(sid);
+          const cwd = getInvocationCwd(args, invocation);
+          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd, defaultQueueId: "inbox" });
+          if (queueContext.error) {
+            syncSidecarVisibility(sid);
+            return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
+          }
+          const item = getTopItem(sid, queueContext.queueId);
           if (!item) {
             syncSidecarVisibility(sid);
-            return "Backlog is empty — no pending items.";
+            return { message: "Backlog is empty — no pending items.", resolution: queueContext.resolution, queueId: queueContext.queueId, next: null, id: null, totalPending: 0 };
           }
-          const count = getPendingCount(sid);
-          return JSON.stringify({ next: item.description, id: item.id, totalPending: count });
+          const count = getPendingCount(sid, queueContext.queueId);
+          return { message: `Next: [${item.id}] ${item.description}`, resolution: queueContext.resolution, queueId: queueContext.queueId, next: item.description, id: item.id, totalPending: count };
         },
       },
       {
         name: "backlog_list",
         description: "List all pending backlog items for the current session.",
         parameters: { type: "object", properties: {} },
-        handler: async (_args, invocation) => {
+        handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
+          const cwd = getInvocationCwd(args, invocation);
+          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd, defaultQueueId: "inbox" });
+          if (queueContext.error) {
+            syncSidecarVisibility(sid);
+            return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false, items: [] };
+          }
           ensureSession(sid);
           syncSidecarVisibility(sid);
           const items = getDb().prepare(
-            "SELECT id, description, position FROM items WHERE session_id = ? AND status = ? ORDER BY position"
-          ).all(sid, "pending");
-          if (items.length === 0) return "Backlog is empty";
-          return items.map((i) => `#${i.position} [${i.id}] ${i.description}`).join("\n");
+            "SELECT id, description, position FROM items WHERE session_id = ? AND queue_id = ? AND status = ? ORDER BY position"
+          ).all(sid, queueContext.queueId, "pending");
+          if (items.length === 0) {
+            return { message: "Backlog is empty", resolution: queueContext.resolution, queueId: queueContext.queueId, items: [] };
+          }
+          return { message: items.map((i) => `#${i.position} [${i.id}] ${i.description}`).join("\n"), resolution: queueContext.resolution, queueId: queueContext.queueId, items };
         },
       },
       {
@@ -109,8 +129,13 @@ export function createBacklogJoinConfig({
         },
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
-          const { id, position } = addItem(sid, args.description, args.top || false);
-          return `Added: '${args.description}' [id: ${id}] (position ${position})`;
+          const cwd = getInvocationCwd(args, invocation);
+          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd, defaultQueueId: "inbox" });
+          if (queueContext.error) {
+            return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
+          }
+          const { id, position } = addItem(sid, args.description, args.top || false, queueContext.queueId);
+          return { message: `Added: '${args.description}' [id: ${id}] (position ${position})`, resolution: queueContext.resolution, queueId: queueContext.queueId, id, position };
         },
       },
       {
@@ -125,9 +150,16 @@ export function createBacklogJoinConfig({
         },
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
-          const item = markDone(sid, args.ref);
-          if (!item) return `Error: Item '${args.ref}' not found`;
-          return `Marked '${item.description}' as done`;
+          const cwd = getInvocationCwd(args, invocation);
+          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd, defaultQueueId: "inbox" });
+          if (queueContext.error) {
+            return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
+          }
+          const item = markDone(sid, args.ref, queueContext.queueId);
+          if (!item) {
+            return { message: `Error: Item '${args.ref}' not found`, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
+          }
+          return { message: `Marked '${item.description}' as done`, resolution: queueContext.resolution, queueId: queueContext.queueId, item };
         },
       },
       {
@@ -142,9 +174,16 @@ export function createBacklogJoinConfig({
         },
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
-          const item = removeItem(sid, args.ref);
-          if (!item) return `Error: Item '${args.ref}' not found`;
-          return `Removed '${item.description}'`;
+          const cwd = getInvocationCwd(args, invocation);
+          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd, defaultQueueId: "inbox" });
+          if (queueContext.error) {
+            return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
+          }
+          const item = removeItem(sid, args.ref, queueContext.queueId);
+          if (!item) {
+            return { message: `Error: Item '${args.ref}' not found`, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
+          }
+          return { message: `Removed '${item.description}'`, resolution: queueContext.resolution, queueId: queueContext.queueId, item };
         },
       },
       {
