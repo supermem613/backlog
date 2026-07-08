@@ -716,7 +716,7 @@ async function engage(card, sid, item) {
   card.classList.add("engaging");
   showToast("engaging " + item.id);
   try {
-    await api("/api/engage", { sessionId: sid, id: item.id });
+    await api("/api/engage", { sessionId: sid, id: item.id, queueId: item.queue_id });
   } catch (e) {
     console.error(e);
     const isOffline = /409|503/.test(e.message || "");

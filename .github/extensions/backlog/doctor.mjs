@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { db, legacyStoragePresent } from "./db.mjs";
+import { createQueue, db, legacyStoragePresent } from "./db.mjs";
 import { addItem, removeItem } from "./items.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -40,11 +40,14 @@ export function getRuntimeInfo() {
 
 export function runItemDeleteSmoke(label = "doctor") {
   const sessionId = `smoke-${label}-${Date.now()}`;
-  const result = addItem(sessionId, "Smoke test item deletion");
+  const queueId = `smoke-${label}`;
+  createQueue({ id: queueId, name: `Smoke ${label}` });
+  const result = addItem(sessionId, "Smoke test item deletion", false, queueId);
   const itemId = result.id;
-  const removed = removeItem(sessionId, itemId);
+  const removed = removeItem(sessionId, itemId, queueId);
   const itemRow = db.prepare("SELECT 1 FROM items WHERE id = ?").get(itemId);
   const sessionRows = db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+  db.prepare("DELETE FROM queues WHERE id = ?").run(queueId);
   return {
     ok: !!removed && !itemRow && sessionRows.changes === 1,
     itemId,

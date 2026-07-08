@@ -124,17 +124,6 @@ export function resolveQueueForCwd(cwd, { queues = [], origin = null } = {}) {
   });
 }
 
-function buildDefaultResolution(defaultQueueId) {
-  return {
-    state: "resolved",
-    matchedBy: "default",
-    queueId: defaultQueueId,
-    queue: undefined,
-    binding: undefined,
-    candidates: [defaultQueueId],
-  };
-}
-
 function formatAmbiguousResolutionError(resolution, cwd) {
   const candidates = Array.isArray(resolution?.candidates) && resolution.candidates.length > 0
     ? resolution.candidates.join(", ")
@@ -154,7 +143,6 @@ export function resolveItemCommandContext({
   origin = null,
   worktreeEvidence = {},
   sessionId = null,
-  defaultQueueId = "inbox",
 } = {}) {
   const queueList = Array.isArray(queues) ? queues : (Array.isArray(worktreeEvidence.queues) ? worktreeEvidence.queues : listQueues());
   const evidence = {
@@ -166,14 +154,22 @@ export function resolveItemCommandContext({
   const normalizedCwd = cwd ? normalizePath(cwd) : null;
 
   if (!normalizedCwd) {
+    const resolution = {
+      state: "unbound",
+      matchedBy: undefined,
+      queueId: undefined,
+      queue: undefined,
+      binding: undefined,
+      candidates: [],
+    };
     return {
       sessionId,
       cwd: normalizedCwd,
-      queueId: defaultQueueId,
+      queueId: undefined,
       queue: undefined,
-      resolution: buildDefaultResolution(defaultQueueId),
-      error: null,
-      candidates: [defaultQueueId],
+      resolution,
+      error: formatUnboundResolutionError(normalizedCwd),
+      candidates: [],
     };
   }
 
@@ -182,7 +178,7 @@ export function resolveItemCommandContext({
     return {
       sessionId,
       cwd: normalizedCwd,
-      queueId: resolution.queueId || defaultQueueId,
+      queueId: resolution.queueId,
       queue: resolution.queue || undefined,
       resolution,
       error: null,

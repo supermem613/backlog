@@ -33,7 +33,8 @@ import {
 } from "./sidecar.mjs";
 
 function normalizeQueueId(queueId) {
-  const resolved = queueId || "inbox";
+  const resolved = String(queueId || "").trim();
+  if (!resolved) throw new Error("queue id is required");
   ensureQueue(resolved);
   return resolved;
 }

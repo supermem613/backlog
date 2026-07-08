@@ -79,7 +79,7 @@ export function createBacklogJoinConfig({
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
-          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd, defaultQueueId: "inbox" });
+          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd });
           if (queueContext.error) {
             syncSidecarVisibility(sid);
             return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
@@ -98,7 +98,7 @@ export function createBacklogJoinConfig({
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
-          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd, defaultQueueId: "inbox" });
+          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd });
           if (queueContext.error) {
             syncSidecarVisibility(sid);
             return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false, items: [] };
@@ -119,7 +119,7 @@ export function createBacklogJoinConfig({
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
-          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd, defaultQueueId: "inbox" });
+          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd });
           if (queueContext.error) {
             return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
           }

@@ -17,8 +17,8 @@ db.exec(`
 `);
 const queueId = "backup-queue";
 db.prepare("INSERT OR REPLACE INTO queues (id, name) VALUES (?, ?)").run(queueId, "Backup Queue");
-const item = addItem("backup-session", "persist through restore");
-db.prepare("UPDATE items SET queue_id = ?, status = ? WHERE id = ?").run(queueId, "approved", item.id);
+const item = addItem("backup-session", "persist through restore", false, queueId);
+db.prepare("UPDATE items SET status = ? WHERE id = ?").run("approved", item.id);
 const store = createStore();
 store.setItemGate({ itemId: item.id, gateKind: "start", state: "approved", binding: { reason: "backup test" }, actor: "test" });
 

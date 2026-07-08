@@ -1,6 +1,7 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
 import { generateId, addItem } from "../items.mjs";
+import { createQueue } from "../db.mjs";
 
 // ID generation must:
 //  - lowercase + slugify
@@ -11,12 +12,15 @@ import { generateId, addItem } from "../items.mjs";
 const a = generateId("Hello, World!");
 assertEqual(a, "hello-world", "slugifies basic input");
 
-addItem("test-session", "Hello, World!"); // claims "hello-world"
+const queueId = "id-generation-queue";
+createQueue({ id: queueId, name: "ID Generation" });
+
+addItem("test-session", "Hello, World!", false, queueId); // claims "hello-world"
 
 const b = generateId("Hello, World!");
 assertEqual(b, "hello-world-2", "appends -2 on first collision");
 
-addItem("test-session", "Hello, World!"); // claims "hello-world-2"
+addItem("test-session", "Hello, World!", false, queueId); // claims "hello-world-2"
 
 const c = generateId("Hello, World!");
 assertEqual(c, "hello-world-3", "appends -3 on second collision");

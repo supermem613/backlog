@@ -22,69 +22,75 @@ import {
 } from "../items.mjs";
 
 const sid = "test-items-session";
+const queueId = "test-items-queue";
+createQueue({ id: queueId, name: "Test Items" });
 
 // add
-const a = addItem(sid, "first task");
+const a = addItem(sid, "first task", false, queueId);
 assertEqual(a.position, 1, "first add lands at position 1");
-const b = addItem(sid, "second task");
+const b = addItem(sid, "second task", false, queueId);
 assertEqual(b.position, 2, "second add lands at position 2");
-addItem(sid, "third task");
+addItem(sid, "third task", false, queueId);
 
-assertEqual(getPendingCount(sid), 3, "pending count = 3 after three adds");
+assertEqual(getPendingCount(sid, queueId), 3, "pending count = 3 after three adds");
 
 // add --top inserts at front and shifts the rest
-const top = addItem(sid, "urgent task", true);
+const top = addItem(sid, "urgent task", true, queueId);
 assertEqual(top.position, 1, "--top add lands at position 1");
-assertEqual(getTopItem(sid).description, "urgent task", "top item is the urgent one");
-assertEqual(getPendingCount(sid), 4, "pending count = 4 after --top add");
+assertEqual(getTopItem(sid, queueId).description, "urgent task", "top item is the urgent one");
+assertEqual(getPendingCount(sid, queueId), 4, "pending count = 4 after --top add");
 
 // done resolves by position and dense-reorders
-const d = markDone(sid, "1");
+const d = markDone(sid, "1", queueId);
 assertEqual(d.description, "urgent task", "done by position 1 marks urgent task done");
-assertEqual(getPendingCount(sid), 3, "pending count drops to 3 after done");
-assertEqual(getTopItem(sid).description, "first task", "first task back at top after done");
+assertEqual(getPendingCount(sid, queueId), 3, "pending count drops to 3 after done");
+assertEqual(getTopItem(sid, queueId).description, "first task", "first task back at top after done");
 
 // remove resolves by id
-const r = removeItem(sid, "second-task");
+const r = removeItem(sid, "second-task", queueId);
 assertEqual(r.description, "second task", "remove by id finds second task");
-assertEqual(getPendingCount(sid), 2, "pending count drops to 2 after remove");
+assertEqual(getPendingCount(sid, queueId), 2, "pending count drops to 2 after remove");
 
 // numeric-leading ids are ids, not position refs
-const numericLeading = addItem(sid, "#2 parsePostHeaderAuthor regex is a task");
-const numericLeadingRemoved = removeItem(sid, numericLeading.id);
+const numericLeading = addItem(sid, "#2 parsePostHeaderAuthor regex is a task", false, queueId);
+const numericLeadingRemoved = removeItem(sid, numericLeading.id, queueId);
 assertEqual(numericLeadingRemoved.description, "#2 parsePostHeaderAuthor regex is a task", "remove by numeric-leading id finds the id");
-assertEqual(resolveItemRef("2", sid).description, "third task", "all-digit refs still resolve by position");
+assertEqual(resolveItemRef("2", sid, queueId).description, "third task", "all-digit refs still resolve by position");
 
 // edit
-const e = editItem(sid, "1", "first task (edited)");
+const e = editItem(sid, "1", "first task (edited)", queueId);
 assertEqual(e.description, "first task (edited)", "edit updates description");
 
 // edit with empty string is rejected
-const eEmpty = editItem(sid, "1", "   ");
+const eEmpty = editItem(sid, "1", "   ", queueId);
 assert(eEmpty === null, "edit with whitespace-only description returns null");
 
 // resolveItemRef returns null for missing ids
-const missing = resolveItemRef("does-not-exist", sid);
+const missing = resolveItemRef("does-not-exist", sid, queueId);
 assert(!missing, "resolveItemRef returns falsy for missing id");
 
 const clearSid = "test-clear-session";
-const clearOne = addItem(clearSid, "clear one");
-const clearTwo = addItem(clearSid, "clear two");
+const clearQueueId = "test-clear-queue";
+createQueue({ id: clearQueueId, name: "Test Clear" });
+const clearOne = addItem(clearSid, "clear one", false, clearQueueId);
+const clearTwo = addItem(clearSid, "clear two", false, clearQueueId);
 setItemGate({ itemId: clearOne.id, gateKind: "start", state: "approved", actor: "test" });
 setItemWaiver({ itemId: clearTwo.id, gateKind: "review", mode: "sticky", actor: "test" });
-const cleared = clearSessionItems(clearSid);
+const cleared = clearSessionItems(clearSid, clearQueueId);
 assertEqual(cleared.changes, 2, "clear removes all session items");
-assertEqual(getPendingCount(clearSid), 0, "clear leaves no pending items");
+assertEqual(getPendingCount(clearSid, clearQueueId), 0, "clear leaves no pending items");
 
-const gated = addItem(sid, "gated remove");
+const gated = addItem(sid, "gated remove", false, queueId);
 setItemGate({ itemId: gated.id, gateKind: "start", state: "approved", actor: "test" });
 setItemWaiver({ itemId: gated.id, gateKind: "review", mode: "sticky", actor: "test" });
-assertEqual(removeItem(sid, gated.id).description, "gated remove", "remove deletes gated item");
+assertEqual(removeItem(sid, gated.id, queueId).description, "gated remove", "remove deletes gated item");
 assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_gates WHERE item_id = ?").get(gated.id).count, 0, "remove deletes item gates");
 assertEqual(db.prepare("SELECT COUNT(*) AS count FROM item_waivers WHERE item_id = ?").get(gated.id).count, 0, "remove deletes item waivers");
 
 const pruneSid = "test-prune-session";
-const pruneItem = addItem(pruneSid, "gated prune");
+const pruneQueueId = "test-prune-queue";
+createQueue({ id: pruneQueueId, name: "Test Prune" });
+const pruneItem = addItem(pruneSid, "gated prune", false, pruneQueueId);
 setItemGate({ itemId: pruneItem.id, gateKind: "start", state: "approved", actor: "test" });
 db.prepare("UPDATE sessions SET last_accessed = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", pruneSid);
 assertEqual(pruneSessions(7), 1, "prune removes stale gated session");

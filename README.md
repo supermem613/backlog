@@ -144,7 +144,7 @@ The agent automatically gets these tools and uses them naturally:
 - `backlog_done` — mark an item complete by id or position.
 - `backlog_status` — inspect which queue is bound to the current workspace.
 
-Tools accept `cwd` when the agent needs to inspect or operate on a specific workspace. If no `cwd` is available, legacy session Inbox behavior is preserved. If a `cwd` is available but no queue binding resolves, item operations fail closed instead of silently using Inbox. Add, edit, and remove stay explicit user actions through `/backlog ...` or `backlog ...`, not automatic agent-callable tools.
+Tools accept `cwd` when the agent needs to inspect or operate on a specific workspace. If no `cwd` is available, or if no queue binding resolves for that workspace, item operations fail closed instead of silently using a fallback queue. Add, edit, and remove stay explicit user actions through `/backlog ...` or `backlog ...`, not automatic agent-callable tools.
 
 ### Permission prompts
 
@@ -152,7 +152,7 @@ Backlog avoids elevated extension capabilities: it does not skip tool permission
 
 ### Sidecar viewer
 
-`/backlog show` (or any session activity once the sidecar is running) opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer groups work by queue, keeps unassigned session items under Inbox, lets you click any item to ask the owning agent session to engage on it, and exposes toolbar controls for burndown mode and viewer refresh.
+`/backlog show` (or any session activity once the sidecar is running) opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer groups work by explicit queue, lets you click any item to ask the owning agent session to engage on it, and exposes toolbar controls for burndown mode and viewer refresh.
 
 The top bar shows the loaded package version, git commit, and storage status. Hover it to see the exact extension and package paths.
 

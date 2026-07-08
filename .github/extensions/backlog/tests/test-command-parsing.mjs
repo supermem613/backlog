@@ -4,7 +4,6 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { db, listQueueScopes } from "../db.mjs";
 import { parseBacklogCommand, handleBacklogCommand } from "../commands.mjs";
-import { addItem } from "../items.mjs";
 import { sandboxDir } from "./harness.mjs";
 
 // Parser
@@ -25,19 +24,9 @@ assertEqual(p4.cmd, "doctor", "doctor command parsed");
 const p5 = parseBacklogCommand("init");
 assertEqual(p5.cmd, "init", "init command parsed");
 
-// Dispatcher — exercise a couple of command paths against the test DB
 const sid = "test-cmd-session";
-const addOut = await handleBacklogCommand(sid, "add hello world");
-assert(addOut.startsWith("Added: 'hello world'"), `add command returns confirmation, got: ${addOut}`);
-
-const listOut = await handleBacklogCommand(sid, "list");
-assert(/hello world/.test(listOut), `list shows added item, got: ${listOut}`);
-const firstId = addOut.match(/\[id: ([^\]]+)\]/)?.[1];
-const editOut = await handleBacklogCommand(sid, `edit ${firstId} hello edited`);
-assert(/Updated 'hello edited'/.test(editOut), `edit command updates item, got: ${editOut}`);
-
-const queueCreateOut = await handleBacklogCommand(sid, "queue create inbox");
-assert(/Created queue/.test(queueCreateOut), `queue create command creates an explicit queue, got: ${queueCreateOut}`);
+const unboundAddOut = await handleBacklogCommand(sid, "add no dumping ground");
+assert(/Unbound queue resolution/.test(unboundAddOut), `add without cwd refuses implicit queue, got: ${unboundAddOut}`);
 const queueTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'queues'").get();
 assert(queueTable, "queue table exists for queue-backed backlog items");
 const initScope = join(sandboxDir, "soda");
@@ -53,9 +42,15 @@ const initAgainOut = await handleBacklogCommand(sid, "init", { cwd: initScope })
 assertEqual(initAgainOut.createdQueue, false, "init reuses an existing queue");
 assertEqual(initAgainOut.createdBinding, false, "init reuses an existing binding");
 assertEqual(listQueueScopes("soda").length, 1, "init is idempotent for the same workspace");
-const queuedItem = addItem(sid, "queue default");
-const queuedItemRow = db.prepare("SELECT queue_id FROM items WHERE id = ?").get(queuedItem.id);
-assertEqual(queuedItemRow.queue_id, "inbox", "new items default to the Inbox queue");
+
+const addOut = await handleBacklogCommand(sid, "add hello world", { cwd: initScope });
+assert(addOut.startsWith("Added: 'hello world'"), `add command returns confirmation, got: ${addOut}`);
+
+const listOut = await handleBacklogCommand(sid, "list", { cwd: initScope });
+assert(/hello world/.test(listOut), `list shows added item, got: ${listOut}`);
+const firstId = addOut.match(/\[id: ([^\]]+)\]/)?.[1];
+const editOut = await handleBacklogCommand(sid, `edit ${firstId} hello edited`, { cwd: initScope });
+assert(/Updated 'hello edited'/.test(editOut), `edit command updates item, got: ${editOut}`);
 
 const gatedId = firstId;
 db.prepare("UPDATE items SET status = ? WHERE id = ?").run("proposed", gatedId);

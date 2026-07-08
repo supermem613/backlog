@@ -35,8 +35,6 @@ import { bindQueueScope, describeBacklogStatus, resolveItemCommandContext } from
 import { getSlashCommandNames } from "./command-registry.mjs";
 import { resolveWorktreeOrigin } from "./vcs-provider.mjs";
 
-const DEFAULT_QUEUE_ID = "inbox";
-
 function queueIdFromScope(scope) {
   return basename(scope)
     .trim()
@@ -63,7 +61,6 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
   const resolveQueueForItemOps = (operationCwd = cwd) => resolveItemCommandContext({
     sessionId,
     cwd: operationCwd,
-    defaultQueueId: DEFAULT_QUEUE_ID,
   });
 
   switch (cmd) {

@@ -131,9 +131,9 @@ export function getCurrentItems(sessionId) {
   return db.prepare(`
     SELECT id, description, position, queue_id, priority, status, created_at
     FROM items
-    WHERE session_id = ? AND status = ? AND (queue_id = ? OR queue_id IS NULL)
+    WHERE session_id = ? AND status = ? AND queue_id IS NOT NULL
     ORDER BY position
-  `).all(sessionId, "pending", "inbox");
+  `).all(sessionId, "pending");
 }
 
 function summarizePorContext(context) {
@@ -170,20 +170,20 @@ function buildQueueSnapshot(sessions) {
     FROM items i
     LEFT JOIN queues q ON q.id = i.queue_id
     WHERE i.status = ?
-    ORDER BY COALESCE(q.name, 'Inbox'), i.position
+    ORDER BY COALESCE(q.name, i.queue_id), i.position
   `).all("pending");
   const sessionsById = new Map(sessions.map((session) => [session.id, session]));
   const queues = new Map();
 
   function ensureQueue(id, name, description, metadata) {
     if (!queues.has(id)) {
-      queues.set(id, { id, name: name || "Inbox", description: description || null, metadata: metadata || {}, items: [], itemCount: 0 });
+      queues.set(id, { id, name: name || id, description: description || null, metadata: metadata || {}, items: [], itemCount: 0 });
     }
     return queues.get(id);
   }
 
   for (const row of queueRows) {
-    ensureQueue(row.id, row.name || "Inbox", row.description, row.metadata_json ? JSON.parse(row.metadata_json) : {});
+    ensureQueue(row.id, row.name || row.id, row.description, row.metadata_json ? JSON.parse(row.metadata_json) : {});
   }
 
   for (const row of rows) {
@@ -196,7 +196,7 @@ function buildQueueSnapshot(sessions) {
     const queueId = row.queue_id;
     if (!queueId) continue;
     if (typeof row.queue_rowid === "number" && typeof row.item_rowid === "number" && row.queue_rowid >= row.item_rowid) continue;
-    const queue = ensureQueue(queueId, row.queue_name || (queueId === "inbox" ? "Inbox" : queueId), row.queue_description, row.queue_metadata_json ? JSON.parse(row.queue_metadata_json) : {});
+    const queue = ensureQueue(queueId, row.queue_name || queueId, row.queue_description, row.queue_metadata_json ? JSON.parse(row.queue_metadata_json) : {});
     const porContext = getItemPorContext(row.id);
     queue.items.push({
       id: row.id,
@@ -642,7 +642,7 @@ export async function handleHttp(req, res) {
     // Engage requires a live peer (or owner-self) to call session.send.
     const isLive = sid === sidecarState.activeSessionId || sidecarState.peers.get(sid)?.socket;
     if (!isLive) { res.writeHead(409); res.end("session offline"); return; }
-    const item = resolveItemRef(body.id, sid);
+    const item = resolveItemRef(body.id, sid, body.queueId);
     if (!item) { res.writeHead(404); res.end("item not found"); return; }
     const dispatched = engageItem(sid, item);
     if (!dispatched) { res.writeHead(503); res.end("session not reachable"); return; }

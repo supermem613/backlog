@@ -1,11 +1,13 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
-import { db } from "../db.mjs";
+import { createQueue, db } from "../db.mjs";
 import { addItem } from "../items.mjs";
 import { buildSnapshot, handleHttp, sidecarState } from "../sidecar.mjs";
 
 const sid = "test-sidecar-offline";
-const { id } = addItem(sid, "delete me from offline session");
+const queueId = "sidecar-mutate-queue";
+createQueue({ id: queueId, name: "Sidecar Mutate" });
+const { id } = addItem(sid, "delete me from offline session", false, queueId);
 sidecarState.role = "owner";
 sidecarState.token = "test-token";
 const events = [];
@@ -77,7 +79,7 @@ async function postMutate(body) {
 
 assertEqual(buildSnapshot().sessions.find((s) => s.id === sid)?.live, false, "session starts as offline in snapshot");
 
-const res = await postMutate({ op: "delete", sessionId: sid, id });
+const res = await postMutate({ op: "delete", sessionId: sid, id, queueId });
 assertEqual(res.statusCode, 200, "offline delete mutation succeeds");
 assertEqual(JSON.parse(res.body).ok, true, "offline delete returns ok");
 assertEqual(db.prepare("SELECT COUNT(*) AS count FROM items WHERE id = ?").get(id).count, 0, "offline item is removed from db");

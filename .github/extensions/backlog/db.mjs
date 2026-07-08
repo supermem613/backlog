@@ -529,7 +529,7 @@ export function createQueue({ id, name, description = null, metadata = {} } = {}
 }
 
 export function ensureQueue(queueId, { name = null, description = null, metadata = undefined } = {}) {
-  if (!queueId) queueId = "inbox";
+  if (!queueId) throw new Error("queue id is required");
   const existing = getQueue(queueId);
   if (existing) {
     if (name !== null || description !== null || metadata !== undefined) {
@@ -570,10 +570,6 @@ export function updateQueue(queueId, { name = undefined, description = undefined
   params.push(queueId);
   db.prepare(`UPDATE queues SET ${updates.join(", ")} WHERE id = ?`).run(...params);
   return getQueue(queueId);
-}
-
-export function ensureDefaultInboxQueue() {
-  return ensureQueue("inbox", { name: "Inbox", description: "Default backlog queue", metadata: { kind: "inbox" } });
 }
 
 function ensureQueueSchema() {
@@ -655,8 +651,8 @@ function ensureQueueSchema() {
   addColumnIfMissing("queues", "metadata_json", "TEXT DEFAULT '{}'" );
   addColumnIfMissing("items", "queue_id", "TEXT");
   addColumnIfMissing("items", "por_json", "TEXT");
-  ensureDefaultInboxQueue();
   backfillItemQueues();
+  purgeInboxQueue();
   bumpUserVersionAtLeast(3);
 }
 
@@ -665,15 +661,37 @@ function backfillItemQueues() {
   const rows = hasLegacyFeatureColumn
     ? db.prepare("SELECT id, feature_id FROM items WHERE queue_id IS NULL OR queue_id = ''").all()
     : db.prepare("SELECT id, NULL AS feature_id FROM items WHERE queue_id IS NULL OR queue_id = ''").all();
+  const unqueuedItemIds = [];
   for (const row of rows) {
-    const queueId = row.feature_id ? `feature-${row.feature_id}` : "inbox";
+    if (!row.feature_id) {
+      unqueuedItemIds.push(row.id);
+      continue;
+    }
+    const queueId = `feature-${row.feature_id}`;
     ensureQueue(queueId, {
-      name: row.feature_id ? `Feature ${row.feature_id}` : "Inbox",
-      description: row.feature_id ? `Compatibility queue for ${row.feature_id}` : "Default backlog queue",
-      metadata: row.feature_id ? { source: "feature-link" } : { kind: "inbox" },
+      name: `Feature ${row.feature_id}`,
+      description: `Compatibility queue for ${row.feature_id}`,
+      metadata: { source: "feature-link" },
     });
     db.prepare("UPDATE items SET queue_id = ? WHERE id = ?").run(queueId, row.id);
   }
+  if (unqueuedItemIds.length > 0) {
+    deleteItemDependentsByIds(unqueuedItemIds);
+    const deleteItem = db.prepare("DELETE FROM items WHERE id = ?");
+    for (const itemId of unqueuedItemIds) deleteItem.run(itemId);
+  }
+}
+
+function purgeInboxQueue() {
+  const inboxItemIds = db.prepare("SELECT id FROM items WHERE queue_id = ?").all("inbox").map((row) => row.id);
+  if (inboxItemIds.length > 0) {
+    deleteItemDependentsByIds(inboxItemIds);
+    const deleteItem = db.prepare("DELETE FROM items WHERE id = ?");
+    for (const itemId of inboxItemIds) deleteItem.run(itemId);
+  }
+  db.prepare("DELETE FROM queue_bindings WHERE queue_id = ?").run("inbox");
+  db.prepare("DELETE FROM queue_loop_state WHERE queue_id = ?").run("inbox");
+  db.prepare("DELETE FROM queues WHERE id = ?").run("inbox");
 }
 
 export function attachItemPorContext(input, maybeMetadata = {}) {
