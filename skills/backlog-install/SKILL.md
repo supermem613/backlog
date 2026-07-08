@@ -7,7 +7,7 @@ Use this skill when the user asks to install, enable, set up, or repair the Copi
 
 Goal:
 
-- Locate the installed `copilot-cli-backlog` plugin under the user's Copilot installed plugins directory.
+- Locate the installed `backlog` plugin under the user's Copilot installed plugins directory.
 - Run the plugin's deterministic shim installer script.
 - Confirm the installer reports `Item delete smoke check passed.`
 - Tell the user to enable or reload the `backlog` user extension in `/extensions` if it is not already running.
@@ -22,7 +22,7 @@ $installer = Get-ChildItem "$env:USERPROFILE\.copilot\installed-plugins" -Direct
   Select-Object -First 1 -ExpandProperty FullName
 
 if (-not $installer) {
-  throw "Could not find the installed copilot-cli-backlog plugin. Run: copilot plugin install supermem613/copilot-cli-backlog"
+  throw "Could not find the installed backlog plugin. Run: copilot plugin install supermem613/backlog"
 }
 
 node (Join-Path $installer "scripts\install-extension-shim.mjs")
@@ -33,7 +33,7 @@ Bash/zsh:
 ```bash
 installer="$(find "$HOME/.copilot/installed-plugins" -type f -path '*/scripts/install-extension-shim.mjs' | head -n 1)"
 if [ -z "$installer" ]; then
-  echo "Could not find the installed copilot-cli-backlog plugin. Run: copilot plugin install supermem613/copilot-cli-backlog" >&2
+  echo "Could not find the installed backlog plugin. Run: copilot plugin install supermem613/backlog" >&2
   exit 1
 fi
 node "$installer"

@@ -58,6 +58,7 @@ assert(/Backlog backup restored/.test(restoreOut), `restore command restores bac
 
 const unknownOut = await handleBacklogCommand(sid, "frobnicate");
 assert(/Unknown command/.test(unknownOut), "unknown command returns error message");
+assert(/status/.test(unknownOut), "unknown command output lists status in the known commands");
 assert(/item delete smoke: ok/.test(await handleBacklogCommand(sid, "doctor")), "doctor command runs smoke check");
 
 done("test-command-parsing");

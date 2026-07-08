@@ -30,6 +30,8 @@ import {
   listHumanDecisions,
   rejectItemReview,
 } from "./review-channel.mjs";
+import { describeBacklogStatus, resolveItemCommandContext } from "./queue-resolver.mjs";
+import { getSlashCommandNames } from "./command-registry.mjs";
 
 const DEFAULT_QUEUE_ID = "inbox";
 
@@ -46,64 +48,92 @@ export function parseBacklogCommand(rawText) {
   return { cmd, args, isTop };
 }
 
-export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = null } = {}) {
+export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = null, cwd = null } = {}) {
   const { cmd, args, isTop } = parseBacklogCommand(rawText);
+  const resolveQueueForItemOps = (operationCwd = cwd) => resolveItemCommandContext({
+    sessionId,
+    cwd: operationCwd,
+    defaultQueueId: DEFAULT_QUEUE_ID,
+  });
 
   switch (cmd) {
     case "add": {
       const desc = args.join(" ").trim();
       if (!desc) return "Error: Description required. Usage: /backlog add <description>";
-      const { id, position } = addItem(sessionId, desc, isTop, DEFAULT_QUEUE_ID);
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
+      const { id, position } = addItem(sessionId, desc, isTop, queueContext.queueId);
       return `Added: '${desc}' [id: ${id}] (position ${position})`;
     }
     case "list": {
       ensureSession(sessionId);
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
       const items = db.prepare(
         "SELECT id, description, position FROM items WHERE session_id = ? AND queue_id = ? AND status = ? ORDER BY position"
-      ).all(sessionId, DEFAULT_QUEUE_ID, "pending");
+      ).all(sessionId, queueContext.queueId, "pending");
       if (items.length === 0) return "Backlog is empty";
       return items.map((i) => `  #${i.position} [${i.id}] ${i.description}`).join("\n");
     }
     case "done": {
-      const item = markDone(sessionId, args[0], DEFAULT_QUEUE_ID);
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
+      const item = markDone(sessionId, args[0], queueContext.queueId);
       if (!item) return `Error: Item '${args[0]}' not found`;
       return `Marked '${item.description}' as done`;
     }
     case "remove": {
-      const item = removeItem(sessionId, args[0], DEFAULT_QUEUE_ID);
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
+      const item = removeItem(sessionId, args[0], queueContext.queueId);
       if (!item) return `Error: Item '${args[0]}' not found`;
       return `Removed '${item.description}'`;
     }
     case "edit": {
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
       const ref = args[0];
       const desc = args.slice(1).join(" ").trim();
       if (!ref || !desc) return "Error: Usage: /backlog edit <id-or-position> <new-description>";
-      const item = editItem(sessionId, ref, desc, DEFAULT_QUEUE_ID);
+      const item = editItem(sessionId, ref, desc, queueContext.queueId);
       if (!item) return `Error: Item '${ref}' not found`;
       return `Updated '${item.description}'`;
     }
     case "top": {
-      const item = moveTop(sessionId, args[0], DEFAULT_QUEUE_ID);
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
+      const item = moveTop(sessionId, args[0], queueContext.queueId);
       if (!item) return `Error: Item '${args[0]}' not found`;
       return `'${item.description}' is now position 1`;
     }
     case "up": {
-      const item = moveUp(sessionId, args[0], DEFAULT_QUEUE_ID);
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
+      const item = moveUp(sessionId, args[0], queueContext.queueId);
       if (!item) return `Error: Item '${args[0]}' not found`;
       return `'${item.description}' moved up`;
     }
     case "down": {
-      const item = moveDown(sessionId, args[0], DEFAULT_QUEUE_ID);
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
+      const item = moveDown(sessionId, args[0], queueContext.queueId);
       if (!item) return `Error: Item '${args[0]}' not found`;
       return `'${item.description}' moved down`;
     }
     case "next": {
-      const item = getTopItem(sessionId, DEFAULT_QUEUE_ID);
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
+      const item = getTopItem(sessionId, queueContext.queueId);
       if (!item) return "Backlog is empty";
       return `Next: [${item.id}] ${item.description}`;
     }
     case "pending": {
-      return String(getPendingCount(sessionId, DEFAULT_QUEUE_ID));
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
+      return String(getPendingCount(sessionId, queueContext.queueId));
+    }
+    case "status": {
+      return describeBacklogStatus({ sessionId, cwd, queues: listQueues() });
     }
     case "sessions": {
       const sessions = listSessions();
@@ -116,7 +146,9 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
       return count === 0 ? "No sessions to prune" : `Removed ${count} session(s) not accessed in ${days}+ days`;
     }
     case "clear": {
-      const result = clearSessionItems(sessionId, DEFAULT_QUEUE_ID);
+      const queueContext = resolveQueueForItemOps();
+      if (queueContext.error) return queueContext.error;
+      const result = clearSessionItems(sessionId, queueContext.queueId);
       return `Cleared ${result.changes} item(s) from session`;
     }
     case "queue": {
@@ -204,24 +236,35 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
     case "loop": {
       if (!loopRuntime) return "Error: Backlog loop runtime is not available";
       const sub = (args[0] || "status").toLowerCase();
-      const queueRef = args[1];
+      const explicitQueueRef = args[1];
+      const resolveLoopQueueRef = () => {
+        if (explicitQueueRef) return { queueRef: explicitQueueRef, error: null, matchedBy: "explicit" };
+        const queueContext = resolveQueueForItemOps();
+        if (queueContext.error) return { queueRef: null, error: queueContext.error, matchedBy: queueContext.resolution?.matchedBy };
+        return { queueRef: queueContext.queueId, error: null, matchedBy: queueContext.resolution?.matchedBy };
+      };
       try {
         if (sub === "start") {
-          if (!queueRef) return "Error: Queue id or name required. Usage: /backlog loop start <queue-id-or-name>";
-          const out = await loopRuntime.start(queueRef);
+          const queueTarget = resolveLoopQueueRef();
+          if (queueTarget.error) return queueTarget.error;
+          if (!queueTarget.queueRef) return "Error: Queue id or name required. Usage: /backlog loop start <queue-id-or-name>";
+          const out = await loopRuntime.start(queueTarget.queueRef);
           if (out.reason === "loop_already_active") {
             return "Error: Another backlog loop is already active in this session";
           }
+          const suffix = explicitQueueRef ? "" : ` from ${queueTarget.matchedBy || "resolved"} binding`;
           return out.started
-            ? `Backlog loop started for queue '${queueRef}'`
-            : `Backlog loop already running for queue '${queueRef}'`;
+            ? `Backlog loop started for queue '${queueTarget.queueRef}'${suffix}`
+            : `Backlog loop already running for queue '${queueTarget.queueRef}'`;
         }
         if (sub === "stop") {
-          if (!queueRef) return "Error: Queue id or name required. Usage: /backlog loop stop <queue-id-or-name>";
-          const out = await loopRuntime.stop(queueRef);
+          const queueTarget = resolveLoopQueueRef();
+          if (queueTarget.error) return queueTarget.error;
+          if (!queueTarget.queueRef) return "Error: Queue id or name required. Usage: /backlog loop stop <queue-id-or-name>";
+          const out = await loopRuntime.stop(queueTarget.queueRef);
           return out.stopped
-            ? `Backlog loop stopped for queue '${queueRef}'`
-            : `Backlog loop is not running for queue '${queueRef}'`;
+            ? `Backlog loop stopped for queue '${queueTarget.queueRef}'`
+            : `Backlog loop is not running for queue '${queueTarget.queueRef}'`;
         }
         if (sub === "status") {
           const running = loopRuntime.list();
@@ -237,6 +280,6 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
       return formatDoctorReport();
     }
     default:
-      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, edit, top, up, down, next, pending, sessions, prune, clear, queue, show, approve, review, backup, restore, loop, doctor`;
+      return `Unknown command: ${cmd}\nCommands: ${getSlashCommandNames().join(", ")}`;
   }
 }

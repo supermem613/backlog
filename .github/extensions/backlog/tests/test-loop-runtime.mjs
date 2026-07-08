@@ -1,9 +1,10 @@
 import "./harness.mjs";
 import { assert, assertEqual, done } from "./harness.mjs";
-import { db } from "../db.mjs";
+import { db, createQueue } from "../db.mjs";
 import { addItem } from "../items.mjs";
 import { handleBacklogCommand } from "../commands.mjs";
 import { createLoopRuntime, extractAssistantContent } from "../loop-runtime.mjs";
+import { bindQueueScope } from "../queue-resolver.mjs";
 import { createStore } from "../store.mjs";
 
 const queueId = "runtime-queue";
@@ -49,5 +50,38 @@ assertEqual(runtime.list().length, 0, "runtime removes stopped controller");
 
 assertEqual(extractAssistantContent({ content: "plain" }), "plain", "assistant content can come from top-level content");
 assertEqual(extractAssistantContent({ data: { message: { content: "nested" } } }), "nested", "assistant content can come from nested message content");
+
+const boundScope = "C:\\repo\\bound-scope";
+const boundQueue = createQueue({ id: "runtime-bound-queue", name: "Runtime Bound Queue" });
+bindQueueScope(boundQueue, boundScope);
+const boundItem = addItem("runtime-session", "runtime bound item", false, boundQueue.id);
+db.prepare("UPDATE items SET status = ?, priority = ? WHERE id = ?").run("approved", 3, boundItem.id);
+
+const boundStore = createStore();
+boundStore.setItemGate({ itemId: boundItem.id, gateKind: "start", state: "approved", actor: "test" });
+
+const boundSent = [];
+const boundNotices = [];
+const boundRuntime = createLoopRuntime({
+  session: { send: async (payload) => boundSent.push(payload) },
+  store: boundStore,
+  getSessionId: () => "runtime-session",
+  repoRoot: "C:\\repo",
+  worktreePath: "C:\\repo\\worktree",
+  log: () => {},
+  notify: (message) => boundNotices.push(message),
+});
+
+const boundStartOut = await handleBacklogCommand("runtime-session", "loop start", { loopRuntime: boundRuntime, cwd: boundScope });
+assert(/started/.test(boundStartOut), `cwd-bound loop start reports start, got: ${boundStartOut}`);
+assertEqual(boundRuntime.list().length, 1, "cwd-bound loop runtime tracks started controller");
+
+if (boundRuntime.list().length === 1) {
+  const boundIdle = await boundRuntime.onIdle();
+  assertEqual(boundIdle[0].fired, true, "cwd-bound runtime onIdle runs approved gate path");
+  assertEqual(boundIdle[0].itemId, boundItem.id, "cwd-bound runtime onIdle targets approved item");
+  assertEqual(boundSent.length, 1, "cwd-bound runtime forwards idle to controller");
+  assert(/BACKLOG_ITEM_COMPLETE:/.test(boundSent[0].prompt), "cwd-bound runtime prompt uses backlog item completion token");
+}
 
 done("test-loop-runtime");

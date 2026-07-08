@@ -3,7 +3,7 @@
 // extension code from this plugin's installed location.
 //
 // Pattern adapted from DamianEdwards/copilot-cli-cost. After the user runs
-// `copilot plugin install supermem613/copilot-cli-backlog`, this script
+// `copilot plugin install supermem613/backlog`, this script
 // finds the installed plugin directory under ~/.copilot/installed-plugins
 // and writes a tiny delegate at ~/.copilot/extensions/backlog/extension.mjs
 // that imports the real extension from the plugin install location.
@@ -64,7 +64,7 @@ function findInstalledExtension() {
     if (matches.length === 0) {
         throw new Error(
             `Could not find ${extensionRelativePath} under ${installedPluginsDirectory}. ` +
-            `Install the plugin first: copilot plugin install supermem613/copilot-cli-backlog`,
+            `Install the plugin first: copilot plugin install supermem613/backlog`,
         );
     }
 
