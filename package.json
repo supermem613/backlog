@@ -1,5 +1,5 @@
 {
-  "name": "copilot-cli-backlog",
+  "name": "backlog",
   "version": "1.0.3",
   "description": "Copilot CLI extension for managing a per-session item backlog with a live sidecar viewer.",
   "type": "module",
@@ -9,10 +9,10 @@
   },
   "license": "MIT",
   "author": "Marcus Markiewicz",
-  "homepage": "https://github.com/supermem613/copilot-cli-backlog",
+  "homepage": "https://github.com/supermem613/backlog",
   "repository": {
     "type": "git",
-    "url": "https://github.com/supermem613/copilot-cli-backlog.git"
+    "url": "https://github.com/supermem613/backlog.git"
   },
   "engines": {
     "node": ">=24.0.0"

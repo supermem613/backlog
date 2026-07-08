@@ -1,4 +1,4 @@
-# copilot-cli-backlog
+# backlog
 
 A GitHub Copilot CLI extension that gives every session a **persistent item backlog** with deterministic slash commands, in-conversation tools the agent can call, an agentic-first `backlog` CLI, and a chromeless sidecar viewer for one-click control.
 
@@ -23,7 +23,7 @@ Enable the **Extensions** feature. If your Copilot CLI version does not show tha
 ### 2. Install the plugin from GitHub
 
 ```
-copilot plugin install supermem613/copilot-cli-backlog
+copilot plugin install supermem613/backlog
 ```
 
 Verify:
@@ -53,7 +53,7 @@ $installer = Get-ChildItem "$env:USERPROFILE\.copilot\installed-plugins" -Direct
   Where-Object { Test-Path (Join-Path $_.FullName "scripts\install-extension-shim.mjs") } |
   Select-Object -First 1 -ExpandProperty FullName
 
-if (-not $installer) { throw "Could not find installed copilot-cli-backlog plugin." }
+if (-not $installer) { throw "Could not find installed backlog plugin." }
 
 node (Join-Path $installer "scripts\install-extension-shim.mjs")
 ```
@@ -62,7 +62,7 @@ Bash/zsh:
 
 ```bash
 installer="$(find "$HOME/.copilot/installed-plugins" -type f -path '*/scripts/install-extension-shim.mjs' | head -n 1)"
-if [ -z "$installer" ]; then echo "Could not find installed copilot-cli-backlog plugin." >&2; exit 1; fi
+if [ -z "$installer" ]; then echo "Could not find installed backlog plugin." >&2; exit 1; fi
 node "$installer"
 ```
 
@@ -159,8 +159,8 @@ A single sidecar window is shared across **all** Copilot CLI sessions on the mac
 ## Develop
 
 ```bash
-git clone https://github.com/supermem613/copilot-cli-backlog.git
-cd copilot-cli-backlog
+git clone https://github.com/supermem613/backlog.git
+cd backlog
 npm run check    # node --check on every .mjs
 npm test         # run the extension test suite
 ```
@@ -196,7 +196,7 @@ Then `/extensions` → reload `backlog`. Edits to the working tree take effect o
 ## Repo layout
 
 ```
-copilot-cli-backlog/
+backlog/
 ├── bin/
 │   └── backlog.mjs                CLI entry point
 ├── .github/
