@@ -9,6 +9,7 @@ const plain = join(tmpdir(), `backlog-provider-plain-${process.pid}`);
 const soda = join(tmpdir(), `backlog-provider-soda-${process.pid}`);
 const gitOrigin = join(tmpdir(), `backlog-provider-git-origin-${process.pid}`);
 const sodaOrigin = join(tmpdir(), `backlog-provider-soda-origin-${process.pid}`);
+const sodaSidequest = join(tmpdir(), `backlog-provider-soda-sidequest-${process.pid}`);
 try {
   mkdirSync(plain, { recursive: true });
   mkdirSync(join(soda, ".sd"), { recursive: true });
@@ -27,6 +28,28 @@ try {
   writeFileSync(join(sodaOrigin, ".sd", "repo-id"), "repo\n", "utf8");
   assertEqual(resolveWorktreeOrigin(join(sodaOrigin, "nested", "child")), sodaOrigin, "soda worktree origin resolves from .sd/repo-id marker");
 
+  mkdirSync(sodaSidequest, { recursive: true });
+  writeFileSync(join(sodaSidequest, ".git"), `gitdir: ${join(sodaOrigin, ".git", "worktrees", "sidequest")}\n`, "utf8");
+  const sdStatus = JSON.stringify({
+    ok: true,
+    data: {
+      summary: {
+        repoRoot: sodaSidequest,
+        mainRepo: { root: sodaOrigin },
+      },
+    },
+  });
+  assertEqual(
+    resolveWorktreeOrigin(join(sodaSidequest, "nested", "child"), { runSodaStatus: () => ({ status: 0, stdout: sdStatus }) }),
+    sodaOrigin,
+    "soda sidequest origin resolves from sd status mainRepo root",
+  );
+  assertEqual(
+    resolveWorktreeOrigin(join(sodaSidequest, "nested", "child"), { runSodaStatus: false }),
+    sodaOrigin,
+    "soda sidequest origin falls back to git worktree metadata when sd is unavailable",
+  );
+
   const lock = new SodaRepoLock();
   assertEqual(lock.acquire("C:\\repo").state, "acquired", "first soda lock acquire succeeds");
   assertEqual(lock.acquire("C:\\repo").state, "blocking", "second soda lock acquire is visible blocking");
@@ -41,4 +64,5 @@ try {
   rmSync(soda, { recursive: true, force: true });
   rmSync(gitOrigin, { recursive: true, force: true });
   rmSync(sodaOrigin, { recursive: true, force: true });
+  rmSync(sodaSidequest, { recursive: true, force: true });
 }

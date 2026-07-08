@@ -6,7 +6,7 @@ The agent and the human share the same backlog: you can `/backlog add` something
 
 Backlog persists in a SQLite database at `~/.backlog/backlog.db` (zero deps — uses Node 24's built-in `node:sqlite`), so items survive across sessions and even across machine restarts.
 
-Backlog queues are resolved from the current workspace directory. A queue can have one or more directory bindings, usually the local repo path. Item commands and tools use the bound queue automatically, including from sidequest or worktree paths when Git or soda evidence resolves back to the bound origin. Remote URLs, owners, repo names, and branch names are not stored as queue identity.
+Backlog queues are resolved from the current workspace directory. A queue can have one or more directory bindings, usually the local repo path. Item commands and tools use the bound queue automatically, including from sidequest or worktree paths when Git or `sd status` reports the sidequest `mainRepo` root. Remote URLs, owners, repo names, and branch names are not stored as queue identity.
 
 ## Install
 
