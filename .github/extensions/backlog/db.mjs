@@ -651,47 +651,7 @@ function ensureQueueSchema() {
   addColumnIfMissing("queues", "metadata_json", "TEXT DEFAULT '{}'" );
   addColumnIfMissing("items", "queue_id", "TEXT");
   addColumnIfMissing("items", "por_json", "TEXT");
-  backfillItemQueues();
-  purgeInboxQueue();
   bumpUserVersionAtLeast(3);
-}
-
-function backfillItemQueues() {
-  const hasLegacyFeatureColumn = itemColumns().includes("feature_id");
-  const rows = hasLegacyFeatureColumn
-    ? db.prepare("SELECT id, feature_id FROM items WHERE queue_id IS NULL OR queue_id = ''").all()
-    : db.prepare("SELECT id, NULL AS feature_id FROM items WHERE queue_id IS NULL OR queue_id = ''").all();
-  const unqueuedItemIds = [];
-  for (const row of rows) {
-    if (!row.feature_id) {
-      unqueuedItemIds.push(row.id);
-      continue;
-    }
-    const queueId = `feature-${row.feature_id}`;
-    ensureQueue(queueId, {
-      name: `Feature ${row.feature_id}`,
-      description: `Compatibility queue for ${row.feature_id}`,
-      metadata: { source: "feature-link" },
-    });
-    db.prepare("UPDATE items SET queue_id = ? WHERE id = ?").run(queueId, row.id);
-  }
-  if (unqueuedItemIds.length > 0) {
-    deleteItemDependentsByIds(unqueuedItemIds);
-    const deleteItem = db.prepare("DELETE FROM items WHERE id = ?");
-    for (const itemId of unqueuedItemIds) deleteItem.run(itemId);
-  }
-}
-
-function purgeInboxQueue() {
-  const inboxItemIds = db.prepare("SELECT id FROM items WHERE queue_id = ?").all("inbox").map((row) => row.id);
-  if (inboxItemIds.length > 0) {
-    deleteItemDependentsByIds(inboxItemIds);
-    const deleteItem = db.prepare("DELETE FROM items WHERE id = ?");
-    for (const itemId of inboxItemIds) deleteItem.run(itemId);
-  }
-  db.prepare("DELETE FROM queue_bindings WHERE queue_id = ?").run("inbox");
-  db.prepare("DELETE FROM queue_loop_state WHERE queue_id = ?").run("inbox");
-  db.prepare("DELETE FROM queues WHERE id = ?").run("inbox");
 }
 
 export function attachItemPorContext(input, maybeMetadata = {}) {

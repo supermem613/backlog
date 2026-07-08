@@ -66,19 +66,12 @@ try {
   assert.equal(dbModule.itemColumns().includes("friction_key"), false, "friction columns are dropped");
   assert.equal(dbModule.tableExists("item_contexts"), false, "item_contexts table is dropped");
   assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 3, "user_version reaches current schema target");
-  const inboxQueue = dbModule.db.prepare("SELECT id, name FROM queues WHERE id = ?").get("inbox");
-  assert.equal(inboxQueue, undefined, "default inbox queue is not created");
   assert.equal(dbModule.tableExists("queue_bindings"), true, "queue bindings table is created");
   const boundScope = join(sandboxDir, "bound-scope");
-  dbModule.bindQueueScope("feature-legacy-feature", boundScope, { preferred: true });
-  const bindings = dbModule.listQueueScopes("feature-legacy-feature");
+  const explicitQueue = dbModule.createQueue({ id: "explicit-queue", name: "Explicit Queue" });
+  dbModule.bindQueueScope(explicitQueue, boundScope, { preferred: true });
+  const bindings = dbModule.listQueueScopes("explicit-queue");
   assert.equal(bindings.some((binding) => binding.scope === boundScope), true, "queue binding rows persist for queue scopes");
-  const compatQueue = dbModule.db.prepare("SELECT id, name FROM queues WHERE id = ?").get("feature-legacy-feature");
-  assert.ok(compatQueue, "legacy feature-linked items get a compatibility queue");
-  const migratedItem = dbModule.db.prepare("SELECT queue_id FROM items WHERE id = ?").get("legacy-item");
-  assert.equal(migratedItem.queue_id, "feature-legacy-feature", "legacy feature-linked items are backfilled to a compatibility queue");
-  const defaultItem = dbModule.db.prepare("SELECT queue_id FROM items WHERE id = ?").get("legacy-item-2");
-  assert.equal(defaultItem, undefined, "legacy items without feature links are discarded instead of dumped into Inbox");
   const archiveDir = join(sandboxDir, "archive");
   const manifestName = readdirSync(archiveDir).find((name) => name.endsWith(".manifest.json"));
   assert.ok(manifestName, "migration writes archive manifest");
@@ -89,7 +82,7 @@ try {
   assert.equal(manifest.item_context_count, 1, "archive records legacy context count");
   dbModule.initBacklog(sandboxDir);
   assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 3, "migration is idempotent on re-run");
-  console.log("✓ test-db-migration: 13/13 assertions passed");
+  console.log("✓ test-db-migration: 10/10 assertions passed");
 } finally {
   try { migratedDb?.close(); } catch {}
   try { rmSync(sandboxDir, { recursive: true, force: true }); } catch {}
