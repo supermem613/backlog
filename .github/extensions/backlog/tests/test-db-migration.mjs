@@ -69,6 +69,11 @@ try {
   const inboxQueue = dbModule.db.prepare("SELECT id, name FROM queues WHERE id = ?").get("inbox");
   assert.ok(inboxQueue, "default inbox queue is created");
   assert.equal(inboxQueue.name, "Inbox", "default inbox queue keeps the expected name");
+  assert.equal(dbModule.tableExists("queue_bindings"), true, "queue bindings table is created");
+  const boundScope = join(sandboxDir, "bound-scope");
+  dbModule.bindQueueScope("inbox", boundScope, { preferred: true });
+  const bindings = dbModule.listQueueScopes("inbox");
+  assert.equal(bindings.some((binding) => binding.scope === boundScope), true, "queue binding rows persist for queue scopes");
   const compatQueue = dbModule.db.prepare("SELECT id, name FROM queues WHERE id = ?").get("feature-legacy-feature");
   assert.ok(compatQueue, "legacy feature-linked items get a compatibility queue");
   const migratedItem = dbModule.db.prepare("SELECT queue_id FROM items WHERE id = ?").get("legacy-item");
@@ -85,7 +90,7 @@ try {
   assert.equal(manifest.item_context_count, 1, "archive records legacy context count");
   dbModule.initBacklog(sandboxDir);
   assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 3, "migration is idempotent on re-run");
-  console.log("✓ test-db-migration: 13/13 assertions passed");
+  console.log("✓ test-db-migration: 14/14 assertions passed");
 } finally {
   try { migratedDb?.close(); } catch {}
   try { rmSync(sandboxDir, { recursive: true, force: true }); } catch {}

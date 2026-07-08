@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export const PROVIDERS = {
   SODA: "soda",
@@ -31,6 +31,25 @@ export function makeProviderCommands(provider) {
     pull: ["git", "pull"],
     branch: ["git", "switch", "-c"],
   };
+}
+
+export function resolveWorktreeOrigin(cwd, evidence = {}) {
+  const start = resolve(cwd || ".");
+  const explicit = [evidence.origin, evidence.worktreeOrigin, evidence.repoRoot, evidence.commonGitDir].filter(Boolean);
+  for (const candidate of explicit) {
+    if (!candidate) continue;
+    return resolve(candidate);
+  }
+  let current = start;
+  while (true) {
+    if (existsSync(join(current, ".git")) || existsSync(join(current, ".sd", "repo-id"))) {
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
 }
 
 export class SodaRepoLock {

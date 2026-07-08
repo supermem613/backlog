@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export let BACKLOG_DIR = null;
 export let db = null;
@@ -457,10 +457,63 @@ export function pruneSessions(days = 7) {
   });
 }
 
+function queueBindingRowToObject(row) {
+  return {
+    id: row.id,
+    queueId: row.queue_id,
+    scope: row.scope,
+    preferred: !!row.preferred,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function bindQueueScope(queueOrId, scope, { preferred = false } = {}) {
+  if (!queueOrId) throw new Error("queue is required");
+  if (!scope) throw new Error("scope is required");
+  const queueId = typeof queueOrId === "string" ? queueOrId : queueOrId?.id;
+  if (!queueId) throw new Error("queue is required");
+  const normalizedScope = resolve(String(scope));
+  const existing = db.prepare("SELECT * FROM queue_bindings WHERE queue_id = ? AND scope = ?").get(queueId, normalizedScope);
+  if (existing) {
+    db.prepare(`
+      UPDATE queue_bindings
+      SET preferred = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE queue_id = ? AND scope = ?
+    `).run(preferred ? 1 : 0, queueId, normalizedScope);
+    return queueBindingRowToObject(db.prepare("SELECT * FROM queue_bindings WHERE queue_id = ? AND scope = ?").get(queueId, normalizedScope));
+  }
+  const result = db.prepare(`
+    INSERT INTO queue_bindings (queue_id, scope, preferred, created_at, updated_at)
+    VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(queueId, normalizedScope, preferred ? 1 : 0);
+  return queueBindingRowToObject(db.prepare("SELECT * FROM queue_bindings WHERE id = ?").get(result.lastInsertRowid));
+}
+
+export function listQueueScopes(queueOrId) {
+  if (!queueOrId) return [];
+  const queueId = typeof queueOrId === "string" ? queueOrId : queueOrId?.id;
+  if (!queueId) return [];
+  return db.prepare("SELECT * FROM queue_bindings WHERE queue_id = ? ORDER BY preferred DESC, scope ASC").all(queueId).map(queueBindingRowToObject);
+}
+
+export function removeQueueScope(queueOrId, scope) {
+  if (!queueOrId) throw new Error("queue is required");
+  if (!scope) throw new Error("scope is required");
+  const queueId = typeof queueOrId === "string" ? queueOrId : queueOrId?.id;
+  if (!queueId) throw new Error("queue is required");
+  const normalizedScope = resolve(String(scope));
+  const existing = db.prepare("SELECT * FROM queue_bindings WHERE queue_id = ? AND scope = ?").get(queueId, normalizedScope);
+  if (!existing) return null;
+  db.prepare("DELETE FROM queue_bindings WHERE queue_id = ? AND scope = ?").run(queueId, normalizedScope);
+  return queueBindingRowToObject(existing);
+}
+
 function queueRowToObject(row) {
   return {
     ...row,
     metadata: row.metadata_json ? parseMetadataJson(row.metadata_json) : {},
+    bindings: listQueueScopes(row.id),
   };
 }
 
@@ -580,7 +633,19 @@ function ensureQueueSchema() {
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (queue_id) REFERENCES queues(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS queue_bindings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      queue_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      preferred INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (queue_id) REFERENCES queues(id) ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_bindings_unique_queue_scope ON queue_bindings(queue_id, scope);
     CREATE INDEX IF NOT EXISTS idx_items_queue_status_position ON items(queue_id, status, position);
+    CREATE INDEX IF NOT EXISTS idx_queue_bindings_queue_scope ON queue_bindings(queue_id, scope);
+    CREATE INDEX IF NOT EXISTS idx_queue_bindings_scope ON queue_bindings(scope, preferred);
     CREATE INDEX IF NOT EXISTS idx_item_pors_item ON item_pors(item_id);
     CREATE INDEX IF NOT EXISTS idx_item_attachments_item ON item_attachments(item_id);
     CREATE INDEX IF NOT EXISTS idx_item_isolation_units_item ON item_isolation_units(item_id);
