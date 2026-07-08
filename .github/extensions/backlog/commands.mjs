@@ -31,6 +31,7 @@ import {
   rejectItemReview,
 } from "./review-channel.mjs";
 import { describeBacklogStatus, resolveItemCommandContext } from "./queue-resolver.mjs";
+import { getSlashCommandNames } from "./command-registry.mjs";
 
 const DEFAULT_QUEUE_ID = "inbox";
 
@@ -268,6 +269,6 @@ export async function handleBacklogCommand(sessionId, rawText, { loopRuntime = n
       return formatDoctorReport();
     }
     default:
-      return `Unknown command: ${cmd}\nCommands: add, list, done, remove, edit, top, up, down, next, pending, status, sessions, prune, clear, queue, show, approve, review, backup, restore, loop, doctor`;
+      return `Unknown command: ${cmd}\nCommands: ${getSlashCommandNames().join(", ")}`;
   }
 }

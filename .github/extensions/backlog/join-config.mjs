@@ -1,4 +1,5 @@
 import { resolveItemCommandContext } from "./queue-resolver.mjs";
+import { getCommandDefinition, getToolDefinitions } from "./command-registry.mjs";
 
 const ELEVATING_HANDLER_KEYS = [
   "onPermissionRequest",
@@ -57,11 +58,14 @@ export function createBacklogJoinConfig({
   removeItem,
   handleBacklogCommand,
 }) {
+  const backlogCommand = getCommandDefinition("backlog");
+  const toolMetadata = Object.fromEntries(getToolDefinitions().map((tool) => [tool.name, tool]));
+
   return {
     commands: [
       {
         name: "backlog",
-        description: "Manage session item backlog and queues: add, list, done, remove, edit, top, up, down, next, pending, status, sessions, prune, clear, queue, show, approve, review, backup, restore, loop, doctor",
+        description: backlogCommand?.description || "Manage session item backlog and queues",
         handler: async (context) => {
           const sid = getActiveSessionId() || "default";
           const rawText = context.args || "list";
@@ -73,9 +77,7 @@ export function createBacklogJoinConfig({
 
     tools: [
       {
-        name: "backlog_next",
-        description: "Get the next pending backlog item. Call this after completing an item to check for more work.",
-        parameters: { type: "object", properties: {} },
+        ...toolMetadata["backlog_next"],
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
@@ -94,9 +96,7 @@ export function createBacklogJoinConfig({
         },
       },
       {
-        name: "backlog_list",
-        description: "List all pending backlog items for the current session.",
-        parameters: { type: "object", properties: {} },
+        ...toolMetadata["backlog_list"],
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
@@ -117,16 +117,7 @@ export function createBacklogJoinConfig({
         },
       },
       {
-        name: "backlog_add",
-        description: "Add an item to the session backlog.",
-        parameters: {
-          type: "object",
-          properties: {
-            description: { type: "string", description: "Task description" },
-            top: { type: "boolean", description: "Add as top priority" },
-          },
-          required: ["description"],
-        },
+        ...toolMetadata["backlog_add"],
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
@@ -139,15 +130,7 @@ export function createBacklogJoinConfig({
         },
       },
       {
-        name: "backlog_done",
-        description: "Mark a backlog item as done by ID or position number.",
-        parameters: {
-          type: "object",
-          properties: {
-            ref: { type: "string", description: "Item ID or position number" },
-          },
-          required: ["ref"],
-        },
+        ...toolMetadata["backlog_done"],
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
@@ -163,15 +146,7 @@ export function createBacklogJoinConfig({
         },
       },
       {
-        name: "backlog_remove",
-        description: "Remove a backlog item without completing it.",
-        parameters: {
-          type: "object",
-          properties: {
-            ref: { type: "string", description: "Item ID or position number" },
-          },
-          required: ["ref"],
-        },
+        ...toolMetadata["backlog_remove"],
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
@@ -187,14 +162,7 @@ export function createBacklogJoinConfig({
         },
       },
       {
-        name: "backlog_status",
-        description: "Inspect the current backlog queue resolution and item counts for a workspace.",
-        parameters: {
-          type: "object",
-          properties: {
-            cwd: { type: "string", description: "Workspace directory to inspect" },
-          },
-        },
+        ...toolMetadata["backlog_status"],
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           return handleBacklogCommand(sid, "status", { cwd: args?.cwd || invocation?.cwd || invocation?.context?.cwd });
