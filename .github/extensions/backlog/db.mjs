@@ -1,4 +1,4 @@
-// Database setup, schema, migrations, and session-level helpers.
+// Database setup, schema, migrations, and queue-level helpers.
 //
 // The DB lives at {BACKLOG_DIR}/backlog.db. BACKLOG_DIR defaults to
 // ~/.backlog but can be overridden by calling initBacklog(dir) before any
@@ -50,26 +50,18 @@ export function initBacklog(dirOverride) {
   db.exec("PRAGMA busy_timeout = 5000;");
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      last_accessed TEXT DEFAULT CURRENT_TIMESTAMP
-    );
     CREATE TABLE IF NOT EXISTS items (
       id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
       description TEXT NOT NULL,
       position INTEGER NOT NULL,
       priority INTEGER DEFAULT 0,
-      queue_id TEXT,
+      queue_id TEXT NOT NULL,
       por_json TEXT,
       status TEXT DEFAULT 'pending',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (session_id) REFERENCES sessions(id)
+      FOREIGN KEY (queue_id) REFERENCES queues(id) ON DELETE CASCADE
     );
-    CREATE INDEX IF NOT EXISTS idx_session ON items(session_id);
-    CREATE INDEX IF NOT EXISTS idx_position ON items(session_id, position);
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
@@ -77,16 +69,14 @@ export function initBacklog(dirOverride) {
     );
   `);
 
-  // Idempotent migration: add label column if it doesn't already exist.
-  // node:sqlite has no IF NOT EXISTS for ADD COLUMN, so try/catch the duplicate.
-  try { db.exec("ALTER TABLE sessions ADD COLUMN label TEXT;"); }
-  catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
   migrateRemoveFrictionStorage();
   addColumnIfMissing("items", "priority", "INTEGER DEFAULT 0");
   addColumnIfMissing("items", "queue_id", "TEXT");
   addColumnIfMissing("items", "por_json", "TEXT");
   ensureEventSchema();
   ensureQueueSchema();
+  migrateRemoveSessionStorage();
+  migrateRemoveLoopStorage();
   // Note: a legacy `pinned` column may exist on older installs. We never read
   // or write it — pinning was removed; the viewer is dismissed by closing the
   // window, and re-opens automatically when new items are added or
@@ -186,6 +176,77 @@ function migrateRemoveFrictionStorage() {
 function bumpUserVersionAtLeast(version) {
   const current = db.prepare("PRAGMA user_version").get().user_version || 0;
   if (current < version) db.exec(`PRAGMA user_version = ${version};`);
+}
+
+function indexExists(name) {
+  return !!db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?"
+  ).get(name);
+}
+
+function migrateRemoveSessionStorage() {
+  const columns = itemColumns();
+  const hasSessionId = columns.includes("session_id");
+  const hasSessions = tableExists("sessions");
+  if (!hasSessionId && !hasSessions) {
+    bumpUserVersionAtLeast(4);
+    return;
+  }
+
+  db.exec("PRAGMA foreign_keys = OFF;");
+  db.exec("PRAGMA legacy_alter_table = ON;");
+  try {
+    if (hasSessionId) {
+      if (db.prepare("SELECT 1 FROM items WHERE queue_id IS NULL LIMIT 1").get()) {
+        ensureQueue("legacy", { name: "Legacy", description: "Migrated items that predate queue bindings" });
+      }
+      db.exec("DROP INDEX IF EXISTS idx_session;");
+      db.exec("DROP INDEX IF EXISTS idx_position;");
+      db.exec("ALTER TABLE items RENAME TO items_session_legacy;");
+      db.exec(`
+        CREATE TABLE items (
+          id TEXT PRIMARY KEY,
+          description TEXT NOT NULL,
+          position INTEGER NOT NULL,
+          priority INTEGER DEFAULT 0,
+          queue_id TEXT NOT NULL,
+          por_json TEXT,
+          status TEXT DEFAULT 'pending',
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (queue_id) REFERENCES queues(id) ON DELETE CASCADE
+        );
+      `);
+      db.exec(`
+        INSERT INTO items (id, description, position, priority, queue_id, por_json, status, created_at, updated_at)
+        SELECT id,
+               description,
+               ROW_NUMBER() OVER (
+                 PARTITION BY COALESCE(queue_id, 'legacy'), status
+                 ORDER BY position, created_at, id
+               ),
+               priority,
+               COALESCE(queue_id, 'legacy'),
+               por_json,
+               status,
+               created_at,
+               updated_at
+        FROM items_session_legacy;
+      `);
+      db.exec("DROP TABLE items_session_legacy;");
+    }
+    db.exec("DROP TABLE IF EXISTS sessions;");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_items_queue_status_position ON items(queue_id, status, position);");
+    bumpUserVersionAtLeast(4);
+  } finally {
+    db.exec("PRAGMA legacy_alter_table = OFF;");
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+}
+
+function migrateRemoveLoopStorage() {
+  db.exec("DROP TABLE IF EXISTS queue_loop_state;");
+  bumpUserVersionAtLeast(5);
 }
 
 function ensureEventSchema() {
@@ -310,16 +371,6 @@ function replayEvent(event) {
         binding_json = excluded.binding_json,
         updated_at = excluded.updated_at
     `).run(event.scope_id, payload.gateKind, payload.state, JSON.stringify(payload.binding || {}), event.ts);
-  } else if (event.kind === "queue_loop_state_set") {
-    db.prepare(`
-      INSERT INTO queue_loop_state (queue_id, status, continuations_fired, in_flight, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(queue_id) DO UPDATE SET
-        status = excluded.status,
-        continuations_fired = excluded.continuations_fired,
-        in_flight = excluded.in_flight,
-        updated_at = excluded.updated_at
-    `).run(event.scope_id, payload.status, payload.continuationsFired || 0, payload.inFlight ? 1 : 0, event.ts);
   } else if (event.kind === "item_lease_set") {
     db.prepare(`
       INSERT INTO item_leases (item_id, lease_id, owner_session, repo_root, worktree_path, heartbeat_at, expires_at, status, needs_recovery, updated_at)
@@ -354,7 +405,6 @@ export function rebuildProjectionsFromEvents() {
       DELETE FROM item_gates;
       DELETE FROM item_waivers;
       DELETE FROM item_leases;
-      DELETE FROM queue_loop_state;
     `);
     const events = db.prepare("SELECT * FROM events ORDER BY id").all();
     for (const event of events) replayEvent(event);
@@ -385,26 +435,6 @@ export function tx(fn) {
   }
 }
 
-export function ensureSession(sessionId) {
-  const exists = db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(sessionId);
-  if (!exists) {
-    db.prepare("INSERT INTO sessions (id) VALUES (?)").run(sessionId);
-  } else {
-    db.prepare("UPDATE sessions SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
-  }
-}
-
-export function setSessionLabel(sessionId, label) {
-  if (!sessionId || !label) return;
-  ensureSession(sessionId);
-  db.prepare("UPDATE sessions SET label = ? WHERE id = ?").run(label, sessionId);
-}
-
-export function getSessionLabel(sessionId) {
-  const row = db.prepare("SELECT label FROM sessions WHERE id = ?").get(sessionId);
-  return row?.label || null;
-}
-
 export function getSetting(key, fallback = null) {
   const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key);
   return row?.value ?? fallback;
@@ -426,35 +456,6 @@ export function deleteItemDependentsByIds(itemIds) {
   db.prepare(`DELETE FROM item_attachments WHERE item_id IN (${placeholders})`).run(...itemIds);
   db.prepare(`DELETE FROM item_isolation_units WHERE item_id IN (${placeholders})`).run(...itemIds);
   db.prepare(`DELETE FROM item_leases WHERE item_id IN (${placeholders})`).run(...itemIds);
-}
-
-export function deleteItemDependentsForSession(sessionId, queueId = null) {
-  const itemIds = queueId
-    ? db.prepare("SELECT id FROM items WHERE session_id = ? AND queue_id = ?").all(sessionId, queueId).map((row) => row.id)
-    : db.prepare("SELECT id FROM items WHERE session_id = ?").all(sessionId).map((row) => row.id);
-  deleteItemDependentsByIds(itemIds);
-}
-
-export function listSessions() {
-  return db.prepare(`
-    SELECT s.id, s.last_accessed,
-           (SELECT COUNT(*) FROM items WHERE session_id = s.id AND status = 'pending') as pending
-    FROM sessions s ORDER BY s.last_accessed DESC
-  `).all();
-}
-
-export function pruneSessions(days = 7) {
-  return tx(() => {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    const stale = db.prepare("SELECT id FROM sessions WHERE last_accessed < ?").all(cutoff.toISOString());
-    for (const s of stale) {
-      deleteItemDependentsForSession(s.id);
-      db.prepare("DELETE FROM items WHERE session_id = ?").run(s.id);
-      db.prepare("DELETE FROM sessions WHERE id = ?").run(s.id);
-    }
-    return stale.length;
-  });
 }
 
 function queueBindingRowToObject(row) {
@@ -621,14 +622,6 @@ function ensureQueueSchema() {
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
     );
-    CREATE TABLE IF NOT EXISTS queue_loop_state (
-      queue_id TEXT PRIMARY KEY,
-      status TEXT NOT NULL,
-      continuations_fired INTEGER NOT NULL DEFAULT 0,
-      in_flight INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (queue_id) REFERENCES queues(id) ON DELETE CASCADE
-    );
     CREATE TABLE IF NOT EXISTS queue_bindings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       queue_id TEXT NOT NULL,
@@ -703,32 +696,6 @@ export function removeItemPorContext(itemId) {
   const context = getItemPorContext(itemId);
   db.prepare("DELETE FROM item_pors WHERE item_id = ?").run(itemId);
   return context;
-}
-
-export function setQueueLoopState({ queueId, status, continuationsFired = 0, inFlight = false, actor = "backlog", correlationId = null }) {
-  return writeWithEvent((database) => {
-    database.prepare(`
-      INSERT INTO queue_loop_state (queue_id, status, continuations_fired, in_flight, updated_at)
-      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(queue_id) DO UPDATE SET
-        status = excluded.status,
-        continuations_fired = excluded.continuations_fired,
-        in_flight = excluded.in_flight,
-        updated_at = CURRENT_TIMESTAMP
-    `).run(queueId, status, continuationsFired, inFlight ? 1 : 0);
-  }, {
-    actor,
-    scopeKind: "queue",
-    scopeId: queueId,
-    kind: "queue_loop_state_set",
-    payload: { status, continuationsFired, inFlight: !!inFlight },
-    correlationId,
-  });
-}
-
-export function getQueueLoopState(queueId) {
-  const row = db.prepare("SELECT * FROM queue_loop_state WHERE queue_id = ?").get(queueId);
-  return row || null;
 }
 
 export function setItemLease({ itemId, leaseId, ownerSession, repoRoot, worktreePath = null, heartbeatAt, expiresAt, status = "active", needsRecovery = false, actor = "backlog", correlationId = null }) {

@@ -15,12 +15,12 @@ assertEqual(a, "hello-world", "slugifies basic input");
 const queueId = "id-generation-queue";
 createQueue({ id: queueId, name: "ID Generation" });
 
-addItem("test-session", "Hello, World!", false, queueId); // claims "hello-world"
+addItem("Hello, World!", false, queueId); // claims "hello-world"
 
 const b = generateId("Hello, World!");
 assertEqual(b, "hello-world-2", "appends -2 on first collision");
 
-addItem("test-session", "Hello, World!", false, queueId); // claims "hello-world-2"
+addItem("Hello, World!", false, queueId); // claims "hello-world-2"
 
 const c = generateId("Hello, World!");
 assertEqual(c, "hello-world-3", "appends -3 on second collision");

@@ -142,7 +142,6 @@ export function resolveItemCommandContext({
   queues = null,
   origin = null,
   worktreeEvidence = {},
-  sessionId = null,
 } = {}) {
   const queueList = Array.isArray(queues) ? queues : (Array.isArray(worktreeEvidence.queues) ? worktreeEvidence.queues : listQueues());
   const evidence = {
@@ -163,7 +162,6 @@ export function resolveItemCommandContext({
       candidates: [],
     };
     return {
-      sessionId,
       cwd: normalizedCwd,
       queueId: undefined,
       queue: undefined,
@@ -176,7 +174,6 @@ export function resolveItemCommandContext({
   const resolution = resolveQueue({ cwd: normalizedCwd, worktreeEvidence: evidence });
   if (resolution.state === "resolved") {
     return {
-      sessionId,
       cwd: normalizedCwd,
       queueId: resolution.queueId,
       queue: resolution.queue || undefined,
@@ -188,7 +185,6 @@ export function resolveItemCommandContext({
 
   if (resolution.state === "ambiguous") {
     return {
-      sessionId,
       cwd: normalizedCwd,
       queueId: undefined,
       queue: undefined,
@@ -199,7 +195,6 @@ export function resolveItemCommandContext({
   }
 
   return {
-    sessionId,
     cwd: normalizedCwd,
     queueId: undefined,
     queue: undefined,
@@ -209,20 +204,20 @@ export function resolveItemCommandContext({
   };
 }
 
-function getItemCount(sessionId, queueId, status) {
+function getItemCount(queueId, status) {
   const normalizedStatus = normalizeStatusValue(status);
-  if (!sessionId || !queueId) return 0;
+  if (!queueId) return 0;
   if (!normalizedStatus) {
     return db.prepare(
-      "SELECT COUNT(*) as count FROM items WHERE session_id = ? AND queue_id = ?"
-    ).get(sessionId, queueId).count;
+      "SELECT COUNT(*) as count FROM items WHERE queue_id = ?"
+    ).get(queueId).count;
   }
   return db.prepare(
-    "SELECT COUNT(*) as count FROM items WHERE session_id = ? AND queue_id = ? AND status = ?"
-  ).get(sessionId, queueId, normalizedStatus).count;
+    "SELECT COUNT(*) as count FROM items WHERE queue_id = ? AND status = ?"
+  ).get(queueId, normalizedStatus).count;
 }
 
-export function describeBacklogStatus({ sessionId, cwd, queues = null, origin = null, worktreeEvidence = {} } = {}) {
+export function describeBacklogStatus({ cwd, queues = null, origin = null, worktreeEvidence = {} } = {}) {
   const normalizedCwd = normalizePath(cwd);
   const queueList = Array.isArray(queues) ? queues : (Array.isArray(worktreeEvidence.queues) ? worktreeEvidence.queues : listQueues());
   const evidence = {
@@ -232,9 +227,9 @@ export function describeBacklogStatus({ sessionId, cwd, queues = null, origin = 
     worktreeOrigin: origin ?? worktreeEvidence.worktreeOrigin ?? worktreeEvidence.origin ?? null,
   };
   const resolution = resolveQueue({ cwd: normalizedCwd, worktreeEvidence: evidence });
-  const totalItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(sessionId, resolution.queueId) : 0;
-  const pendingItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(sessionId, resolution.queueId, "pending") : 0;
-  const doneItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(sessionId, resolution.queueId, "done") : 0;
+  const totalItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(resolution.queueId) : 0;
+  const pendingItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(resolution.queueId, "pending") : 0;
+  const doneItems = resolution.state === "resolved" && resolution.queueId ? getItemCount(resolution.queueId, "done") : 0;
   const itemCounts = {
     pending: totalItems,
     done: doneItems,

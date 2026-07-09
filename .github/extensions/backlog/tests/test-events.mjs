@@ -8,14 +8,13 @@ import {
   setItemGate,
   setItemLease,
   setItemWaiver,
-  setQueueLoopState,
   tableExists,
   writeWithEvent,
 } from "../db.mjs";
 import { addItem } from "../items.mjs";
 
 const queueId = "events-queue";
-const item = addItem("events-session", "event-backed item", false, queueId);
+const item = addItem("event-backed item", false, queueId);
 db.prepare("UPDATE items SET priority = ? WHERE id = ?").run(10, item.id);
 
 const eventId = appendEvent({
@@ -61,7 +60,6 @@ assertEqual(db.prepare("SELECT value FROM settings WHERE key = ?").get("atomic-o
 assertEqual(db.prepare("SELECT COUNT(*) AS count FROM events WHERE scope_id = ?").get("atomic-ok").count, 1, "successful mutation writes event");
 
 setItemGate({ itemId: item.id, gateKind: "start", state: "approved", binding: { base: "abc" }, actor: "test" });
-setQueueLoopState({ queueId, status: "running", continuationsFired: 2, inFlight: true, actor: "test" });
 setItemLease({
   itemId: item.id,
   leaseId: "lease-1",
@@ -78,7 +76,6 @@ setItemWaiver({ itemId: item.id, gateKind: "start", mode: "count", remainingUses
 function projectionDigest() {
   const payload = {
     itemGates: db.prepare("SELECT item_id, gate_kind, state, binding_json FROM item_gates ORDER BY item_id, gate_kind").all(),
-    queueLoopState: db.prepare("SELECT queue_id, status, continuations_fired, in_flight FROM queue_loop_state ORDER BY queue_id").all(),
     itemLeases: db.prepare("SELECT item_id, lease_id, owner_session, needs_recovery FROM item_leases ORDER BY item_id").all(),
     waivers: db.prepare("SELECT item_id, gate_kind, mode, remaining_uses FROM item_waivers ORDER BY item_id, gate_kind").all(),
   };
@@ -88,7 +85,7 @@ function projectionDigest() {
 const before = projectionDigest();
 const replayed = rebuildProjectionsFromEvents();
 const after = projectionDigest();
-assert(replayed >= 6, "replay processed event log");
+assert(replayed >= 5, "replay processed event log");
 assertEqual(after, before, "rebuilt projections match incremental projections");
 
 assertEqual(db.prepare("SELECT COUNT(*) AS count FROM gates").get().count, 1, "gates view returns item gates");

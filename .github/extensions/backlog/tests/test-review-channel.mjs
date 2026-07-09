@@ -11,7 +11,7 @@ import {
   requestItemReview,
 } from "../review-channel.mjs";
 
-const item = addItem("review-session", "review gated item", false, "review-queue");
+const item = addItem("review gated item", false, "review-queue");
 db.prepare("UPDATE items SET status = ? WHERE id = ?").run("proposed", item.id);
 
 const store = createStore();

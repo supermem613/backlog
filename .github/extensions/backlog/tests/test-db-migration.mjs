@@ -65,7 +65,11 @@ try {
   assert.equal(dbModule.frictionStoragePresent(), false, "legacy friction storage is removed");
   assert.equal(dbModule.itemColumns().includes("friction_key"), false, "friction columns are dropped");
   assert.equal(dbModule.tableExists("item_contexts"), false, "item_contexts table is dropped");
-  assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 3, "user_version reaches current schema target");
+  assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 5, "user_version reaches current schema target");
+  assert.equal(dbModule.tableExists("sessions"), false, "sessions table is dropped");
+  assert.equal(dbModule.itemColumns().includes("session_id"), false, "items no longer store session ids");
+  assert.equal(dbModule.tableExists("queue_loop_state"), false, "queue loop state table is dropped");
+  assert.equal(dbModule.db.prepare("SELECT COUNT(*) AS count FROM items WHERE queue_id = ?").get("legacy").count, 2, "legacy items are preserved in a queue");
   assert.equal(dbModule.tableExists("queue_bindings"), true, "queue bindings table is created");
   const boundScope = join(sandboxDir, "bound-scope");
   const explicitQueue = dbModule.createQueue({ id: "explicit-queue", name: "Explicit Queue" });
@@ -81,8 +85,8 @@ try {
   assert.equal(manifest.friction_item_count, 1, "archive records legacy item count");
   assert.equal(manifest.item_context_count, 1, "archive records legacy context count");
   dbModule.initBacklog(sandboxDir);
-  assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 3, "migration is idempotent on re-run");
-  console.log("✓ test-db-migration: 10/10 assertions passed");
+  assert.equal(dbModule.db.prepare("PRAGMA user_version").get().user_version, 5, "migration is idempotent on re-run");
+  console.log("✓ test-db-migration: 14/14 assertions passed");
 } finally {
   try { migratedDb?.close(); } catch {}
   try { rmSync(sandboxDir, { recursive: true, force: true }); } catch {}

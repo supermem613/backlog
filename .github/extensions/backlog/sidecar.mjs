@@ -1,16 +1,15 @@
 // Sidecar viewer: singleton process owns one HTTP+WS server bound to a
 // fixed port (SHARED_PORT) plus the chromeless browser window. Other
-// extension processes register as clients over /peer WS and forward their
-// session info, mutations, and engage callbacks through the owner.
+// extension processes register as clients over /peer WS and forward live
+// routing info, mutations, and engage callbacks through the owner.
 //
 // Roles:
 //   owner  — bound the fixed port; runs server; spawns viewer; tracks peers.
 //   client — connected to owner over WS; mutates DB locally then asks owner
 //            to refresh; receives engage requests and calls session.send().
 //
-// All sessions share a DB (WAL mode) so the owner can serve a unified view
-// of every session's items by querying directly. Clients still mutate the
-// DB themselves — peer messages only carry intent and identity, not data.
+// All processes share a queue DB in WAL mode. Clients still mutate the DB
+// themselves. Peer messages only carry live routing metadata, not backlog data.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, watch } from "node:fs";
 import { homedir, platform } from "node:os";
@@ -21,7 +20,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as net_module from "node:net";
 
-import { db, BACKLOG_DIR, setSessionLabel, getSessionLabel, getItemPorContext } from "./db.mjs";
+import { db, BACKLOG_DIR, getItemPorContext } from "./db.mjs";
 import {
   addItem,
   moveTop,
@@ -94,22 +93,13 @@ export const sidecarState = {
   forceOpen: false,
   viewerSuppressed: false,
   programmaticClose: false,
-  // Sessions in burndown mode — when an item completes (markDone), the next
-  // top item is auto-engaged. In-memory only; cleared on owner restart and
-  // when the session disconnects.
-  burndown: new Set(),
   // sessionId -> itemId currently dispatched for engagement. Set when an
   // engage prompt is sent; cleared when that item is markDone'd / removed
-  // / no longer pending. Drives the viewer's "engaging…" badge so manual
-  // clicks and burndown auto-engage look the same. Burndown auto-advance
-  // is gated on `state === "idle"` (below), not on this — the engaging map
-  // is purely a visual signal.
+  // / no longer pending. Drives the viewer's "engaging…" badge.
   engaging: new Map(),
   // sessionId -> "idle" | "busy". The agent's activity state, derived from
   // SDK events and bumped to "busy" immediately when we programmatically
-  // inject an engage prompt via session.send, so back-to-back burndown
-  // advances don't race the not-yet-published busy signal. Drives the rail
-  // chip dot color and gates burndown auto-advance.
+  // inject an engage prompt via session.send.
   // Defaults to "idle" on first sighting of a session.
   sessionState: new Map(),
   deferViewerClose: 0,
@@ -127,13 +117,13 @@ export const sidecarState = {
 export function setActiveSessionId(id) { sidecarState.activeSessionId = id; }
 export function setSessionRef(ref)     { sidecarState.sessionRef = ref; }
 
-export function getCurrentItems(sessionId) {
+export function getCurrentItems() {
   return db.prepare(`
     SELECT id, description, position, queue_id, priority, status, created_at
     FROM items
-    WHERE session_id = ? AND status = ? AND queue_id IS NOT NULL
+    WHERE status = ? AND queue_id IS NOT NULL
     ORDER BY position
-  `).all(sessionId, "pending");
+  `).all("pending");
 }
 
 function summarizePorContext(context) {
@@ -150,13 +140,12 @@ function summarizePorContext(context) {
   return parts.length > 0 ? parts.join(" • ") : null;
 }
 
-function buildQueueSnapshot(sessions) {
+function buildQueueSnapshot(sessions, activeSessionIdHint = null) {
   const queueRows = db.prepare("SELECT id, name, description, metadata_json FROM queues ORDER BY name, created_at").all();
   const rows = db.prepare(`
     SELECT
       i.rowid AS item_rowid,
       i.id,
-      i.session_id,
       i.description,
       i.position,
       i.priority,
@@ -172,7 +161,9 @@ function buildQueueSnapshot(sessions) {
     WHERE i.status = ?
     ORDER BY COALESCE(q.name, i.queue_id), i.position
   `).all("pending");
-  const sessionsById = new Map(sessions.map((session) => [session.id, session]));
+  const liveSession = sessions.find((session) => session.id === activeSessionIdHint && session.live)
+    || sessions.find((session) => session.live)
+    || null;
   const queues = new Map();
 
   function ensureQueue(id, name, description, metadata) {
@@ -187,12 +178,6 @@ function buildQueueSnapshot(sessions) {
   }
 
   for (const row of rows) {
-    const session = sessionsById.get(row.session_id) || {
-      id: row.session_id,
-      label: row.session_id.slice(0, 8),
-      live: false,
-      state: "offline",
-    };
     const queueId = row.queue_id;
     if (!queueId) continue;
     if (typeof row.queue_rowid === "number" && typeof row.item_rowid === "number" && row.queue_rowid >= row.item_rowid) continue;
@@ -200,10 +185,10 @@ function buildQueueSnapshot(sessions) {
     const porContext = getItemPorContext(row.id);
     queue.items.push({
       id: row.id,
-      session_id: row.session_id,
-      session_label: session.label,
-      session_live: !!session.live,
-      session_state: session.state,
+      peer_id: liveSession?.id || null,
+      peer_label: liveSession?.label || null,
+      peer_live: !!liveSession,
+      peer_state: liveSession?.state || "offline",
       description: row.description,
       position: row.position,
       queue_id: queueId,
@@ -283,14 +268,10 @@ export function lockIsStale(lock) {
 
 // One unified payload for the browser. The viewer is the source of truth
 // for what's in the DB — every session with pending items appears, even
-// if no live extension process is currently registered for it (orphan).
-// Live peers contribute cwd/repo/branch metadata; orphans surface their
-// stored label (or short-id) and are flagged live:false so the UI can
-// render them as offline (red dot, engage disabled).
+// Live peers contribute cwd/repo/branch metadata for browser actions.
 export function buildSnapshot(activeSessionIdHint) {
   const peers = sidecarState.peers;
   const sessions = [];
-  const seen = new Set();
   for (const [sid, peer] of peers) {
     sessions.push({
       id: sid,
@@ -299,42 +280,19 @@ export function buildSnapshot(activeSessionIdHint) {
       repo: peer.repo || null,
       branch: peer.branch || null,
       live: true,
-      burndown: sidecarState.burndown.has(sid),
       engagingId: sidecarState.engaging.get(sid) || null,
       state: sidecarState.sessionState.get(sid) || "idle",
-      items: getCurrentItems(sid),
-    });
-    seen.add(sid);
-  }
-  // Orphan sessions: any session in the DB with pending items but no live peer.
-  const orphanRows = db.prepare(`
-    SELECT s.id, s.label
-    FROM sessions s
-    WHERE EXISTS (SELECT 1 FROM items i WHERE i.session_id = s.id AND i.status = 'pending')
-    ORDER BY s.last_accessed DESC
-  `).all();
-  for (const row of orphanRows) {
-    if (seen.has(row.id)) continue;
-    sessions.push({
-      id: row.id,
-      label: row.label || row.id.slice(0, 8),
-      cwd: null,
-      repo: null,
-      branch: null,
-      live: false,
-      burndown: false,
-      engagingId: null,
-      state: "offline",
-      items: getCurrentItems(row.id),
+      items: [],
     });
   }
+  const activeSessionId = activeSessionIdHint || sessions.find((session) => session.live)?.id || sessions[0]?.id || null;
   return {
     type: "snapshot",
-    activeSessionId: activeSessionIdHint || sessions.find(s => s.live)?.id || sessions[0]?.id || null,
+    activeSessionId,
     activeQueueId: null,
     runtime: getRuntimeInfo(),
     decisions: listHumanDecisions(),
-    queues: buildQueueSnapshot(sessions),
+    queues: buildQueueSnapshot(sessions, activeSessionId),
     sessions,
   };
 }
@@ -544,13 +502,11 @@ function handlePeerWsUpgrade(req, socket) {
       if (!sidecarState.sessionState.has(registeredSid)) {
         sidecarState.sessionState.set(registeredSid, "idle");
       }
-      if (msg.label) setSessionLabel(registeredSid, msg.label);
       syncOwnerVisibility();
       ownerRefresh(registeredSid);
     } else if (msg.type === "label") {
       const peer = sidecarState.peers.get(msg.sessionId);
       if (peer) peer.label = msg.label;
-      if (msg.label) setSessionLabel(msg.sessionId, msg.label);
       ownerRefresh();
     } else if (msg.type === "refresh") {
       ownerRefresh(msg.sessionId);
@@ -559,8 +515,6 @@ function handlePeerWsUpgrade(req, socket) {
       sidecarState.viewerSuppressed = false;
       syncOwnerVisibility();
       ownerRefresh();
-    } else if (msg.type === "burndown") {
-      setBurndown(msg.sessionId, !!msg.enabled);
     } else if (msg.type === "state") {
       if (msg.state === "idle" || msg.state === "busy") {
         setSessionState(msg.sessionId, msg.state);
@@ -568,7 +522,6 @@ function handlePeerWsUpgrade(req, socket) {
     } else if (msg.type === "unregister") {
       if (registeredSid) {
         sidecarState.peers.delete(registeredSid);
-        sidecarState.burndown.delete(registeredSid);
         sidecarState.engaging.delete(registeredSid);
         sidecarState.sessionState.delete(registeredSid);
       }
@@ -578,7 +531,6 @@ function handlePeerWsUpgrade(req, socket) {
   const cleanup = () => {
     if (registeredSid) {
       sidecarState.peers.delete(registeredSid);
-      sidecarState.burndown.delete(registeredSid);
       sidecarState.engaging.delete(registeredSid);
       sidecarState.sessionState.delete(registeredSid);
     }
@@ -637,29 +589,17 @@ export async function handleHttp(req, res) {
     try { body = await readJsonBody(req); }
     catch { res.writeHead(400); res.end("bad body"); return; }
     if (body.token !== sidecarState.token) { res.writeHead(401); res.end("unauthorized"); return; }
-    const sid = body.sessionId;
-    if (!sid) { res.writeHead(400); res.end("missing sessionId"); return; }
+    const sid = body.peerId;
+    if (!sid) { res.writeHead(400); res.end("missing peerId"); return; }
     // Engage requires a live peer (or owner-self) to call session.send.
     const isLive = sid === sidecarState.activeSessionId || sidecarState.peers.get(sid)?.socket;
     if (!isLive) { res.writeHead(409); res.end("session offline"); return; }
-    const item = resolveItemRef(body.id, sid, body.queueId);
+    const item = resolveItemRef(body.id, body.queueId);
     if (!item) { res.writeHead(404); res.end("item not found"); return; }
     const dispatched = engageItem(sid, item);
     if (!dispatched) { res.writeHead(503); res.end("session not reachable"); return; }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, id: item.id }));
-    return;
-  }
-  if (req.method === "POST" && url.pathname === "/api/burndown") {
-    let body;
-    try { body = await readJsonBody(req); }
-    catch { res.writeHead(400); res.end("bad body"); return; }
-    if (body.token !== sidecarState.token) { res.writeHead(401); res.end("unauthorized"); return; }
-    const sid = body.sessionId;
-    if (!sid) { res.writeHead(400); res.end("missing sessionId"); return; }
-    setBurndown(sid, !!body.enabled);
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, enabled: sidecarState.burndown.has(sid) }));
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/mutate") {
@@ -668,16 +608,14 @@ export async function handleHttp(req, res) {
     try { body = await readJsonBody(req); }
     catch { res.writeHead(400); res.end("bad body"); return; }
     if (body.token !== sidecarState.token) { res.writeHead(401); res.end("unauthorized"); return; }
-    const sid = body.sessionId;
-    if (!sid) { res.writeHead(400); res.end("missing sessionId"); return; }
     let result = null;
     const queueId = body.queueId || null;
     switch (body.op) {
-      case "add": result = addItem(sid, body.description || "", false, queueId); break;
-      case "up":     result = moveUp(sid, body.id, queueId); break;
-      case "down":   result = moveDown(sid, body.id, queueId); break;
-      case "edit":   result = editItem(sid, body.id, body.description, queueId); break;
-      case "delete": result = removeItem(sid, body.id, queueId); break;
+      case "add": result = addItem(body.description || "", false, queueId); break;
+      case "up":     result = moveUp(body.id, queueId); break;
+      case "down":   result = moveDown(body.id, queueId); break;
+      case "edit":   result = editItem(body.id, body.description, queueId); break;
+      case "delete": result = removeItem(body.id, queueId); break;
       default: res.writeHead(400); res.end("bad op"); return;
     }
     if (!result) { res.writeHead(400); res.end("invalid request"); return; }
@@ -709,13 +647,10 @@ function routeEngage(sessionId, { prompt }) {
 }
 
 // Promote `item` to position 1 and dispatch the standard engage prompt.
-// Shared by /api/engage and burndown auto-advance so prompt wording stays
-// in lockstep. Marks the item as the session's currently-engaged item so
-// the viewer can render the "engaging…" badge, and immediately marks the
-// session "busy" so back-to-back burndown advances don't race the
-// not-yet-published busy signal from the agent.
+// Marks the item as the live peer's currently-engaged item so the viewer
+// can render the "engaging…" badge.
 function engageItem(sessionId, item) {
-  moveTop(sessionId, item.id);
+  moveTop(item.id, item.queue_id);
   sidecarState.engaging.set(sessionId, item.id);
   const prompt = makeEngagePrompt(item);
   const dispatched = routeEngage(sessionId, { itemId: item.id, prompt });
@@ -728,45 +663,14 @@ function engageItem(sessionId, item) {
   return dispatched;
 }
 
-// Called after markDone — if burndown is on for this session and there's a
-// next item, auto-engage it. Silent no-op when burndown is off, the
-// backlog is empty, the session isn't reachable, or the agent isn't idle
-// (next session.idle event retries via onSessionIdle handler).
-export function maybeBurndownNext(sessionId) {
-  if (sidecarState.role !== "owner") return;
-  if (!sidecarState.burndown.has(sessionId)) return;
-  if ((sidecarState.sessionState.get(sessionId) || "idle") !== "idle") return;
-  const next = getTopItem(sessionId);
-  if (!next) return;
-  engageItem(sessionId, next);
-}
-
-// Toggle burndown for a session. Routes to owner from clients via "burndown"
-// peer message. Kicks off the first engage immediately when turning on so
-// the user doesn't have to manually start the chain — but only if the CLI
-// is idle. If the agent is busy when burndown is enabled, the next
-// session.idle event will pick up the chain.
-export function setBurndown(sessionId, enabled) {
-  if (sidecarState.role === "owner") {
-    if (enabled) sidecarState.burndown.add(sessionId);
-    else sidecarState.burndown.delete(sessionId);
-    ownerRefresh(sessionId);
-    if (enabled) maybeBurndownNext(sessionId);
-  } else if (sidecarState.role === "client") {
-    peerSend({ type: "burndown", sessionId, enabled: !!enabled });
-  }
-}
-
-// Update a session's busy/idle state. Owner stores it directly and may
-// fire burndown auto-advance on the idle edge. Clients forward to the
-// owner as a peer message so the rail chip and burndown gate stay in sync.
+// Update a session's busy/idle state. Owner stores it directly. Clients
+// forward to the owner as a peer message so the rail chip stays in sync.
 export function setSessionState(sessionId, state) {
   if (sidecarState.role === "owner") {
     const prev = sidecarState.sessionState.get(sessionId) || "idle";
     if (prev === state) return;
     sidecarState.sessionState.set(sessionId, state);
     ownerRefresh(sessionId);
-    if (state === "idle") maybeBurndownNext(sessionId);
   } else if (sidecarState.role === "client") {
     peerSend({ type: "state", sessionId, state });
   }
@@ -806,7 +710,7 @@ function becomeOwner(server) {
 export function registerActiveSession() {
   const sid = sidecarState.activeSessionId;
   if (!sid) return;
-  const label = getSessionLabel(sid) || sid.slice(0, 8);
+  const label = sidecarState.peers.get(sid)?.label || sid.slice(0, 8);
   if (sidecarState.role === "owner") {
     const existing = sidecarState.peers.get(sid);
     sidecarState.peers.set(sid, {

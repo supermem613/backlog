@@ -6,7 +6,6 @@ import { BACKLOG_DIR, db, tx } from "./db.mjs";
 
 const BACKUP_VERSION = 1;
 const TABLES = [
-  "sessions",
   "settings",
   "queues",
   "items",
@@ -14,7 +13,6 @@ const TABLES = [
   "item_attachments",
   "item_isolation_units",
   "item_leases",
-  "queue_loop_state",
   "events",
   "item_gates",
   "item_waivers",

@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { db, initBacklog } from "./db.mjs";
+import { initBacklog } from "./db.mjs";
 import {
   SCHEMA_VERSION,
   createSchemaEnvelope,
@@ -140,7 +140,6 @@ export async function runCli(argv = process.argv.slice(2)) {
     import("./queue-resolver.mjs"),
   ]);
 
-  const sessionId = db?.prepare("SELECT id FROM sessions ORDER BY last_accessed DESC, created_at DESC LIMIT 1").get()?.id || "cli";
   const commandName = parsed.command || "help";
   const startTime = Date.now();
   let envelope = {
@@ -161,11 +160,11 @@ export async function runCli(argv = process.argv.slice(2)) {
     } else if (commandName === "schema") {
       envelope.data = createSchemaEnvelope();
     } else if (commandName === "doctor") {
-      const result = await handleBacklogCommand(sessionId, "doctor", { cwd: parsed.cwd || process.cwd() });
+      const result = await handleBacklogCommand("doctor", { cwd: parsed.cwd || process.cwd() });
       envelope.data = typeof result === "string" ? { output: result } : result;
     } else if (getSlashCommandNames().includes(commandName)) {
       const rawText = [commandName, ...parsed.args].join(" ").trim();
-      const result = await handleBacklogCommand(sessionId, rawText, { cwd: parsed.cwd || process.cwd() });
+      const result = await handleBacklogCommand(rawText, { cwd: parsed.cwd || process.cwd() });
       envelope.data = typeof result === "string" ? { output: result } : result;
     } else {
       envelope.ok = false;

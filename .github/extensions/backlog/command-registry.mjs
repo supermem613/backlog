@@ -4,7 +4,7 @@ const commandDefinitions = [
   {
     name: "backlog",
     scope: "slash",
-    description: "Manage session item backlog and queues.",
+    description: "Manage backlog queues and items.",
     usage: "/backlog <command> [args]",
   },
   {
@@ -80,21 +80,9 @@ const commandDefinitions = [
     usage: "/backlog init [queue-id] [name]",
   },
   {
-    name: "sessions",
-    scope: "slash",
-    description: "List backlog sessions.",
-    usage: "/backlog sessions",
-  },
-  {
-    name: "prune",
-    scope: "slash",
-    description: "Prune inactive sessions.",
-    usage: "/backlog prune [days]",
-  },
-  {
     name: "clear",
     scope: "slash",
-    description: "Clear all backlog items from the current session.",
+    description: "Clear all backlog items from the resolved queue.",
     usage: "/backlog clear",
   },
   {
@@ -134,12 +122,6 @@ const commandDefinitions = [
     usage: "/backlog restore <path>",
   },
   {
-    name: "loop",
-    scope: "slash",
-    description: "Control backlog loops, resolving from the workspace when no queue is explicit.",
-    usage: "/backlog loop start|stop|status [queue-id-or-name]",
-  },
-  {
     name: "doctor",
     scope: "slash",
     description: "Show the backlog doctor report.",
@@ -172,7 +154,7 @@ const toolDefinitions = [
   },
   {
     name: "backlog_list",
-    description: "List all pending backlog items for the current session.",
+    description: "List all pending backlog items for the resolved queue.",
     parameters: {
       type: "object",
       properties: {

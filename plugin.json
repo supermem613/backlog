@@ -1,6 +1,6 @@
 {
   "name": "backlog",
-  "description": "Per-session item backlog for GitHub Copilot CLI, with deterministic slash commands, in-conversation tools, and a live sidecar viewer.",
+  "description": "Workspace queue backlog for GitHub Copilot CLI, with deterministic slash commands, in-conversation tools, and a live sidecar viewer.",
   "version": "1.0.3",
   "author": {
     "name": "Marcus Markiewicz"

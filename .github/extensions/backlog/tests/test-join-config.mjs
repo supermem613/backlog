@@ -18,7 +18,6 @@ const dependencies = {
   getActiveSessionId: () => "test-session",
   log: () => {},
   syncSidecarVisibility: () => {},
-  ensureSession: () => {},
   getDb: () => ({
     prepare: () => ({
       all: () => [],
@@ -27,7 +26,7 @@ const dependencies = {
   getTopItem: () => null,
   getPendingCount: () => 0,
   markDone: () => ({ description: "done item" }),
-  handleBacklogCommand: async (sessionId, rawText) => {
+  handleBacklogCommand: async (rawText) => {
     if (rawText === "status") return statusResolution;
     return "ok";
   },
@@ -54,7 +53,7 @@ assertDeprivilegedJoinConfig(config);
 const statusTool = config.tools.find((tool) => tool.name === "backlog_status");
 assert(statusTool, "backlog_status tool is registered");
 assertEqual(typeof statusTool.handler, "function", "backlog_status tool exposes a handler");
-const commandResult = await dependencies.handleBacklogCommand("test-session", "status", { cwd: "/tmp/status-scope" });
+const commandResult = await dependencies.handleBacklogCommand("status", { cwd: "/tmp/status-scope" });
 const toolResult = await statusTool.handler({}, { sessionId: "test-session" });
 assertEqual(typeof toolResult, "object", "backlog_status handler returns a resolution block");
 assertEqual(JSON.stringify(Object.keys(toolResult).sort()), JSON.stringify(Object.keys(commandResult).sort()), "backlog_status handler returns the same resolution block shape as /backlog status");

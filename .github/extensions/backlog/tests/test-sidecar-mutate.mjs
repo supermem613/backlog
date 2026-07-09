@@ -4,10 +4,9 @@ import { createQueue, db } from "../db.mjs";
 import { addItem } from "../items.mjs";
 import { buildSnapshot, handleHttp, sidecarState } from "../sidecar.mjs";
 
-const sid = "test-sidecar-offline";
 const queueId = "sidecar-mutate-queue";
 createQueue({ id: queueId, name: "Sidecar Mutate" });
-const { id } = addItem(sid, "delete me from offline session", false, queueId);
+const { id } = addItem("delete me from sidecar", false, queueId);
 sidecarState.role = "owner";
 sidecarState.token = "test-token";
 const events = [];
@@ -77,13 +76,12 @@ async function postMutate(body) {
   return res;
 }
 
-assertEqual(buildSnapshot().sessions.find((s) => s.id === sid)?.live, false, "session starts as offline in snapshot");
+assertEqual(buildSnapshot().sessions.length, 0, "snapshot starts without live peers");
 
-const res = await postMutate({ op: "delete", sessionId: sid, id, queueId });
-assertEqual(res.statusCode, 200, "offline delete mutation succeeds");
-assertEqual(JSON.parse(res.body).ok, true, "offline delete returns ok");
-assertEqual(db.prepare("SELECT COUNT(*) AS count FROM items WHERE id = ?").get(id).count, 0, "offline item is removed from db");
-assert(!buildSnapshot().sessions.find((s) => s.id === sid), "empty offline session disappears from snapshot");
+const res = await postMutate({ op: "delete", id, queueId });
+assertEqual(res.statusCode, 200, "delete mutation succeeds");
+assertEqual(JSON.parse(res.body).ok, true, "delete returns ok");
+assertEqual(db.prepare("SELECT COUNT(*) AS count FROM items WHERE id = ?").get(id).count, 0, "item is removed from db");
 assertEqual(events.includes("viewer-close-message"), false, "viewer close is deferred until after response");
 
 await new Promise((resolve) => setImmediate(resolve));

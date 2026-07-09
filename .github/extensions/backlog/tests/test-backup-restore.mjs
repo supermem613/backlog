@@ -17,7 +17,7 @@ db.exec(`
 `);
 const queueId = "backup-queue";
 db.prepare("INSERT OR REPLACE INTO queues (id, name) VALUES (?, ?)").run(queueId, "Backup Queue");
-const item = addItem("backup-session", "persist through restore", false, queueId);
+const item = addItem("persist through restore", false, queueId);
 db.prepare("UPDATE items SET status = ? WHERE id = ?").run("approved", item.id);
 const store = createStore();
 store.setItemGate({ itemId: item.id, gateKind: "start", state: "approved", binding: { reason: "backup test" }, actor: "test" });
@@ -31,7 +31,7 @@ assertEqual(JSON.parse(readFileSync(backupPath, "utf8")).manifest.sha256, export
 assertEqual(JSON.parse(readFileSync(backupPath, "utf8")).manifest.tables.includes("queues"), true, "backup manifest records queue tables");
 
 db.prepare("UPDATE items SET description = ?, status = ? WHERE id = ?").run("mutated", "blocked", item.id);
-db.prepare("DELETE FROM queues WHERE id = ?").run(queueId);
+db.prepare("UPDATE queues SET name = ? WHERE id = ?").run("Mutated Queue", queueId);
 db.prepare("DELETE FROM item_gates WHERE item_id = ?").run(item.id);
 
 const restored = restoreBacklogBackup({ inputPath: backupPath });

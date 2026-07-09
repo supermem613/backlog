@@ -1,10 +1,10 @@
 # backlog
 
-A GitHub Copilot CLI extension that gives every session a **persistent item backlog** with deterministic slash commands, in-conversation tools the agent can call, an agentic-first `backlog` CLI, and a chromeless sidecar viewer for one-click control.
+A GitHub Copilot CLI extension that gives each workspace a **persistent queue backlog** with deterministic slash commands, in-conversation tools the agent can call, an agentic-first `backlog` CLI, and a chromeless sidecar viewer for one-click control.
 
-The agent and the human share the same backlog: you can `/backlog add` something while the agent is working, the agent can call `backlog_next` after completing a step to pick up the next item, and the sidecar window shows a live, click-to-engage list across all your active Copilot CLI sessions.
+The agent and the human share the same queue: you can `/backlog add` something while the agent is working, the agent can call `backlog_next` after completing a step to pick up the next item, and the sidecar window shows a live, click-to-engage queue list.
 
-Backlog persists in a SQLite database at `~/.backlog/backlog.db` (zero deps — uses Node 24's built-in `node:sqlite`), so items survive across sessions and even across machine restarts.
+Backlog persists queues and items in a SQLite database at `~/.backlog/backlog.db` (zero deps — uses Node 24's built-in `node:sqlite`), so items survive restarts without storing Copilot session rows.
 
 Backlog queues are resolved from the current workspace directory. A queue can have one or more directory bindings, usually the local repo path. Item commands and tools use the bound queue automatically, including from sidequest or worktree paths when Git or `sd status` reports the sidequest `mainRepo` root. Remote URLs, owners, repo names, and branch names are not stored as queue identity.
 
@@ -92,9 +92,7 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 /backlog pending                    # count of pending items
 /backlog status                     # inspect queue binding for this workspace
 /backlog init [queue-id] [name]     # create or bind a queue for this workspace
-/backlog sessions                   # list all sessions with pending items
-/backlog prune [days]               # drop sessions not accessed in N days (default 7)
-/backlog clear                      # delete every item in this session
+/backlog clear                      # delete every item in the resolved queue
 /backlog queue list                 # list queues and their bindings
 /backlog queue add <queue-id> [name] # create a queue
 /backlog queue edit <queue-id> <description>
@@ -105,9 +103,6 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 /backlog review <id> approve|reject # accept or reject an autonomous item output
 /backlog backup [path]              # export a checksum-protected JSON backup
 /backlog restore <path>             # verify checksum and restore a JSON backup
-/backlog loop status                # list active autonomous queue loops
-/backlog loop start [queue-id]      # start an approved queue loop
-/backlog loop stop [queue-id]       # stop an active queue loop
 /backlog doctor                     # show runtime provenance and run delete smoke check
 ```
 
@@ -116,8 +111,6 @@ Items can be referenced by short ID (e.g. `t1a2b3`) or by position number (e.g. 
 `/backlog status` is read-only. It reports the selected `queueId`, queue bindings, item counts, match type (`exact`, `worktree-origin`, `ancestor`, or `default`), and any ambiguous candidates. Use it to confirm what queue Copilot CLI will operate on before adding, draining, or starting work.
 
 Run `/backlog init` or `backlog init` from a repo directory to create or reuse a queue named after that directory and bind it. For `C:\Users\marcusm\repos\soda`, the single command is `backlog init`, which creates queue `soda` and binds that local repo path. You can override the id and name with `backlog init <queue-id> <name>`.
-
-When no queue id is passed to `/backlog loop start` or `/backlog loop stop`, backlog uses the same workspace resolver as item operations. Explicit queue ids still win.
 
 `/backlog doctor` reports the loaded extension path, package version, git commit, storage status, and runs an item delete smoke check. Use it after upgrades or extension reloads to confirm the running extension is the one you expect.
 
@@ -129,7 +122,6 @@ The package also installs a `backlog` CLI that mirrors the slash command surface
 backlog status --json
 backlog init
 backlog add "write the next test" --cwd C:\path\to\repo
-backlog loop start --cwd C:\path\to\repo
 backlog schema --json
 ```
 
@@ -152,7 +144,7 @@ Backlog avoids elevated extension capabilities: it does not skip tool permission
 
 ### Sidecar viewer
 
-`/backlog show` (or any session activity once the sidecar is running) opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer groups work by explicit queue, lets you click any item to ask the owning agent session to engage on it, and exposes toolbar controls for burndown mode and viewer refresh.
+`/backlog show` opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer groups work by explicit queue, lets you click any item to ask the active agent to engage on it, and exposes a viewer refresh control.
 
 The top bar shows the loaded package version, git commit, and storage status. Hover it to see the exact extension and package paths.
 

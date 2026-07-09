@@ -49,7 +49,6 @@ export function createBacklogJoinConfig({
   getActiveSessionId,
   log,
   syncSidecarVisibility,
-  ensureSession,
   getDb,
   getTopItem,
   getPendingCount,
@@ -63,11 +62,11 @@ export function createBacklogJoinConfig({
     commands: [
       {
         name: "backlog",
-        description: backlogCommand?.description || "Manage session item backlog and queues",
+        description: backlogCommand?.description || "Manage backlog queues and items",
         handler: async (context) => {
           const sid = getActiveSessionId() || "default";
           const rawText = context.args || "list";
-          const result = await handleBacklogCommand(sid, rawText, { cwd: context.cwd || context.options?.cwd });
+          const result = await handleBacklogCommand(rawText, { cwd: context.cwd || context.options?.cwd });
           log(result);
         },
       },
@@ -79,17 +78,17 @@ export function createBacklogJoinConfig({
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
-          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd });
+          const queueContext = resolveItemCommandContext({ cwd });
           if (queueContext.error) {
             syncSidecarVisibility(sid);
             return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
           }
-          const item = getTopItem(sid, queueContext.queueId);
+          const item = getTopItem(queueContext.queueId);
           if (!item) {
             syncSidecarVisibility(sid);
             return { message: "Backlog is empty — no pending items.", resolution: queueContext.resolution, queueId: queueContext.queueId, next: null, id: null, totalPending: 0 };
           }
-          const count = getPendingCount(sid, queueContext.queueId);
+          const count = getPendingCount(queueContext.queueId);
           return { message: `Next: [${item.id}] ${item.description}`, resolution: queueContext.resolution, queueId: queueContext.queueId, next: item.description, id: item.id, totalPending: count };
         },
       },
@@ -98,16 +97,15 @@ export function createBacklogJoinConfig({
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
-          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd });
+          const queueContext = resolveItemCommandContext({ cwd });
           if (queueContext.error) {
             syncSidecarVisibility(sid);
             return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false, items: [] };
           }
-          ensureSession(sid);
           syncSidecarVisibility(sid);
           const items = getDb().prepare(
-            "SELECT id, description, position FROM items WHERE session_id = ? AND queue_id = ? AND status = ? ORDER BY position"
-          ).all(sid, queueContext.queueId, "pending");
+            "SELECT id, description, position FROM items WHERE queue_id = ? AND status = ? ORDER BY position"
+          ).all(queueContext.queueId, "pending");
           if (items.length === 0) {
             return { message: "Backlog is empty", resolution: queueContext.resolution, queueId: queueContext.queueId, items: [] };
           }
@@ -119,11 +117,11 @@ export function createBacklogJoinConfig({
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
           const cwd = getInvocationCwd(args, invocation);
-          const queueContext = resolveItemCommandContext({ sessionId: sid, cwd });
+          const queueContext = resolveItemCommandContext({ cwd });
           if (queueContext.error) {
             return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
           }
-          const item = markDone(sid, args.ref, queueContext.queueId);
+          const item = markDone(args.ref, queueContext.queueId);
           if (!item) {
             return { message: `Error: Item '${args.ref}' not found`, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
           }
@@ -133,8 +131,7 @@ export function createBacklogJoinConfig({
       {
         ...toolMetadata["backlog_status"],
         handler: async (args, invocation) => {
-          const sid = invocation?.sessionId || getActiveSessionId() || "default";
-          return handleBacklogCommand(sid, "status", { cwd: args?.cwd || invocation?.cwd || invocation?.context?.cwd });
+          return handleBacklogCommand("status", { cwd: args?.cwd || invocation?.cwd || invocation?.context?.cwd });
         },
       },
     ],

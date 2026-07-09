@@ -90,20 +90,6 @@
     transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
   }
   .topbar .refresh:hover { background: #2a2d34; color: var(--text); border-color: var(--accent); }
-  .topbar .burndown {
-    background: transparent; border: 1px solid var(--border-soft);
-    color: var(--text-soft); border-radius: 4px;
-    padding: 3px 9px; font-size: 11px; line-height: 1;
-    display: inline-flex; align-items: center; gap: 5px;
-    font-variant-numeric: tabular-nums;
-    transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
-  }
-  .topbar .burndown:hover { background: #2a2d34; color: var(--text); border-color: var(--accent); }
-  .topbar .burndown.on {
-    background: var(--accent); color: #0e0f12; border-color: var(--accent);
-  }
-  .topbar .burndown.on:hover { background: #8fb8ff; border-color: #8fb8ff; }
-  .topbar .burndown:disabled { opacity: 0.35; cursor: not-allowed; background: transparent; color: var(--muted); border-color: var(--border-soft); }
   /* ---------- Sidebar ---------- */
   .rail {
     background: var(--bg-rail);
@@ -373,7 +359,6 @@
       <span class="right">
         <span class="runtime" id="runtime" title="Runtime not loaded">runtime unknown</span>
         <span class="status" id="status"><span class="dot"></span>connecting…</span>
-        <button type="button" class="burndown" id="burndown" title="Burndown mode: auto-engage the next item whenever one is marked done" aria-label="Toggle burndown" aria-pressed="false" disabled>🔥 Burndown</button>
         <button type="button" class="refresh" id="refresh" title="Reload viewer (picks up viewer.html changes)" aria-label="Refresh">↻</button>
       </span>
     </div>
@@ -404,24 +389,12 @@ const addForm = document.getElementById("add-form");
 const addInput = document.getElementById("add-input");
 const addBtn = document.getElementById("add-btn");
 const refreshBtn = document.getElementById("refresh");
-const burndownBtn = document.getElementById("burndown");
-
 refreshBtn.addEventListener("click", async () => {
   try {
     await fetch("/api/reload-viewer?token=" + encodeURIComponent(TOKEN), { method: "POST" });
   } catch (e) { console.error("reload-viewer failed", e); }
   intentionalClose = true;
   location.reload();
-});
-
-burndownBtn.addEventListener("click", async () => {
-  const session = (snapshot.sessions || []).find((entry) => entry.id === addSessionId);
-  if (!session || !session.live) return;
-  const next = !session.burndown;
-  try {
-    await api("/api/burndown", { sessionId: session.id, enabled: next });
-    showToast(next ? "burndown on — auto-engaging items" : "burndown off");
-  } catch (e) { console.error(e); showToast("burndown toggle failed", true); }
 });
 
 let intentionalClose = false;
@@ -496,7 +469,7 @@ function getAddSession() {
     return sessions.find((session) => session.id === addSessionId);
   }
   const selectedQueue = getSelectedQueue();
-  const liveItemSessionId = selectedQueue?.items.find((item) => item.session_live)?.session_id;
+  const liveItemSessionId = selectedQueue?.items.find((item) => item.peer_live)?.peer_id;
   const target = liveItemSessionId
     ? sessions.find((session) => session.id === liveItemSessionId)
     : sessions.find((session) => session.id === snapshot.activeSessionId && session.live) || sessions.find((session) => session.live);
@@ -524,7 +497,7 @@ addForm.addEventListener("submit", async (ev) => {
   if (!desc || !addSession || !selectedQueue) return;
   addBtn.disabled = true; addInput.disabled = true;
   try {
-    await api("/api/mutate", { op: "add", sessionId: addSession.id, description: desc, queueId: selectedQueue.id });
+    await api("/api/mutate", { op: "add", description: desc, queueId: selectedQueue.id });
     addInput.value = "";
     showToast("added");
   } catch (e) {
@@ -599,7 +572,7 @@ function renderMain() {
     idEl.textContent = item.id;
     const sessionEl = document.createElement("span");
     sessionEl.className = "session";
-    sessionEl.textContent = item.session_label || item.session_id;
+    sessionEl.textContent = item.peer_label || item.peer_id || "queue";
     const ageEl = document.createElement("span");
     ageEl.className = "age";
     ageEl.textContent = relAge(item.created_at);
@@ -617,19 +590,19 @@ function renderMain() {
     const actions = document.createElement("div");
     actions.className = "actions";
     actions.addEventListener("click", (e) => e.stopPropagation());
-    const upBtn = mkAction("↑", "Move up", () => mutate({ op: "up", sessionId: item.session_id, id: item.id, queueId: queue.id }, "moved up"));
-    const downBtn = mkAction("↓", "Move down", () => mutate({ op: "down", sessionId: item.session_id, id: item.id, queueId: queue.id }, "moved down"));
+    const upBtn = mkAction("↑", "Move up", () => mutate({ op: "up", id: item.id, queueId: queue.id }, "moved up"));
+    const downBtn = mkAction("↓", "Move down", () => mutate({ op: "down", id: item.id, queueId: queue.id }, "moved down"));
     const editBtn = mkAction("✎", "Edit", () => beginEdit(card, titleEl, item, queue.id));
     const spacer = document.createElement("span");
     spacer.className = "spacer";
-    const delBtn = mkAction("✕", "Delete", () => mutate({ op: "delete", sessionId: item.session_id, id: item.id, queueId: queue.id }, "deleted"));
+    const delBtn = mkAction("✕", "Delete", () => mutate({ op: "delete", id: item.id, queueId: queue.id }, "deleted"));
     delBtn.classList.add("danger");
     actions.append(upBtn, downBtn, editBtn, spacer, delBtn);
 
     card.append(titleRow, meta, contextEl, actions);
     titleRow.addEventListener("click", () => {
-      if (!item.session_live) { showToast("session is offline", true); return; }
-      engage(card, item.session_id, item);
+      if (!item.peer_live) { showToast("session is offline", true); return; }
+      engage(card, item.peer_id, item);
     });
     list.appendChild(card);
   });
@@ -647,18 +620,7 @@ function renderAll() {
   setStatus(total + (total === 1 ? " item" : " items") + " · " + sessions.length + " session" + (sessions.length === 1 ? "" : "s"), status.classList.contains("bad") ? "bad" : "live");
   renderRail();
   renderMain();
-  renderBurndown();
   renderRuntime();
-}
-
-function renderBurndown() {
-  const session = getAddSession();
-  const enabled = !!session?.burndown;
-  const live = !!session?.live;
-  burndownBtn.classList.toggle("on", enabled);
-  burndownBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
-  burndownBtn.disabled = !live;
-  burndownBtn.textContent = enabled ? "🔥 Burndown ON" : "🔥 Burndown";
 }
 
 function mkAction(glyph, title, onClick) {
@@ -697,7 +659,7 @@ function beginEdit(card, titleEl, item, queueId) {
     const newDesc = input.value.trim();
     try {
       if (commit && newDesc && newDesc !== item.description) {
-        await mutate({ op: "edit", sessionId: item.session_id, id: item.id, description: newDesc, queueId }, "edited");
+        await mutate({ op: "edit", id: item.id, description: newDesc, queueId }, "edited");
         titleEl.textContent = newDesc;
       }
     } finally {
@@ -716,7 +678,7 @@ async function engage(card, sid, item) {
   card.classList.add("engaging");
   showToast("engaging " + item.id);
   try {
-    await api("/api/engage", { sessionId: sid, id: item.id, queueId: item.queue_id });
+    await api("/api/engage", { peerId: sid, id: item.id, queueId: item.queue_id });
   } catch (e) {
     console.error(e);
     const isOffline = /409|503/.test(e.message || "");

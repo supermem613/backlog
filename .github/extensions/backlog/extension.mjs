@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
  * Copilot CLI Extension: Backlog
- * A per-session item queue with deterministic slash commands, tools, and sidecar control.
+ * A queue-backed backlog with deterministic slash commands, tools, and sidecar control.
  * Storage: ~/.backlog/backlog.db (node:sqlite — zero deps, bundled with Node 24)
  *
  * Module layout:
- *   db.mjs       — DatabaseSync + schema + migrations + session helpers
+ *   db.mjs       — DatabaseSync + schema + migrations + queue helpers
  *   items.mjs    — item CRUD + position management
  *   prompt.mjs   — engage prompt + reminder banner strings
  *   sidecar.mjs  — singleton viewer (HTTP+WS), owner/peer election, browser launch
@@ -18,15 +18,8 @@ import { joinSession } from "@github/copilot-sdk/extension";
 import {
   initBacklog,
   db,
-  ensureSession,
-  setSessionLabel,
-  getSessionLabel,
 } from "./db.mjs";
-import {
-  markDone,
-  getTopItem,
-  getPendingCount,
-} from "./items.mjs";
+import { markDone, getTopItem, getPendingCount } from "./items.mjs";
 import {
   setActiveSessionId,
   setSessionRef,
@@ -37,12 +30,8 @@ import {
   stopSidecar,
   pushLabelToOwner,
 } from "./sidecar.mjs";
-import {
-  makeSessionEndBanner,
-} from "./prompt.mjs";
 import { handleBacklogCommand } from "./commands.mjs";
 import { createExtensionCommandHandler } from "./extension-command-handler.mjs";
-import { createLoopRuntime } from "./loop-runtime.mjs";
 import {
   assertDeprivilegedJoinConfig,
   createBacklogJoinConfig,
@@ -54,61 +43,33 @@ import {
 initBacklog();
 
 let activeSessionId = null;
-let loopRuntime = null;
 
 function setActiveSession(id) {
   if (!id) return null;
   activeSessionId = id;
   setActiveSessionId(id);
-  ensureSession(id);
   return id;
-}
-
-function logPendingOnEnd() {
-  if (!activeSessionId) return;
-  const count = getPendingCount(activeSessionId);
-  if (count === 0) return;
-  const items = db.prepare(
-    "SELECT id, description, position FROM items WHERE session_id = ? AND status = ? ORDER BY position LIMIT 5"
-  ).all(activeSessionId, "pending");
-  session.log(makeSessionEndBanner(count, items), { level: "warn" });
 }
 
 const joinConfig = createBacklogJoinConfig({
   getActiveSessionId: () => activeSessionId,
   log: (message, options) => session.log(message, options),
   syncSidecarVisibility,
-  ensureSession,
   getDb: () => db,
   getTopItem,
   getPendingCount,
   markDone,
   handleBacklogCommand: createExtensionCommandHandler({
     handleBacklogCommand,
-    getLoopRuntime: () => loopRuntime,
   }),
 });
 assertDeprivilegedJoinConfig(joinConfig);
 
 const session = await joinSession(joinConfig);
-loopRuntime = createLoopRuntime({
-  session,
-  getSessionId: () => activeSessionId,
-  repoRoot: process.cwd(),
-  worktreePath: process.cwd(),
-  log: (message, options) => session.log(message, options),
-  notify: (message) => session.log(message, { level: "warn" }),
-});
 
 // session is now available — wire it into sidecar so /api/engage can call session.send.
 setSessionRef(session);
 setActiveSession(session.sessionId || session.id);
-// Seed a label from cwd if we don't already have one — covers extension
-// reloads where session.start has long since fired and won't replay.
-if (activeSessionId && !getSessionLabel(activeSessionId)) {
-  const fallback = process.cwd().split(/[\\/]/).filter(Boolean).pop();
-  if (fallback) setSessionLabel(activeSessionId, fallback);
-}
 
 // Actively fetch the Copilot CLI's current session name. session.title_changed
 // only fires on transitions; on extension reload (or when the title was set
@@ -120,7 +81,6 @@ if (activeSessionId && !getSessionLabel(activeSessionId)) {
     const result = await session.rpc.name.get();
     const name = result?.name?.trim();
     if (name && activeSessionId) {
-      setSessionLabel(activeSessionId, name);
       pushLabelToOwner(activeSessionId, name);
     }
   } catch (e) {
@@ -143,8 +103,7 @@ function deriveLabelFromContext(ctx) {
 session.on("session.start", (ev) => {
   const sid = setActiveSession(activeSessionId || session.sessionId || session.id);
   if (!sid) return;
-  const label = deriveLabelFromContext(ev.data?.context) || getSessionLabel(sid);
-  if (label && !getSessionLabel(sid)) setSessionLabel(sid, label);
+  const label = deriveLabelFromContext(ev.data?.context);
   if (label) pushLabelToOwner(sid, label);
   registerActiveSession();
   syncSidecarVisibility(sid);
@@ -154,31 +113,24 @@ session.on("session.title_changed", (ev) => {
   const sid = activeSessionId;
   const title = ev.data?.title?.trim();
   if (!sid || !title) return;
-  setSessionLabel(sid, title);
   pushLabelToOwner(sid, title);
 });
 
-// Track agent busy/idle so the rail chip dot can show amber/green and
-// burndown auto-advance fires the next item only when the agent is truly
-// idle. session.idle fires after every turn the agent finishes (including
-// turns we kicked off via session.send for a burndown auto-advance).
+// Track agent busy/idle so the rail chip dot can show amber/green.
 session.on("assistant.message", async (event) => {
   if (event.agentId) return;
   const sid = activeSessionId;
   if (!sid) return;
   setSessionState(sid, "busy");
-  await loopRuntime?.onAssistantMessage(event);
 });
 
 session.on("session.idle", async () => {
   const sid = activeSessionId;
   if (!sid) return;
   setSessionState(sid, "idle");
-  await loopRuntime?.onIdle();
 });
 
 session.on?.("session.end", () => {
-  logPendingOnEnd();
   stopSidecar();
 });
 

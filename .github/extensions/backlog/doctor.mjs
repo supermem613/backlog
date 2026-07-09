@@ -39,17 +39,15 @@ export function getRuntimeInfo() {
 }
 
 export function runItemDeleteSmoke(label = "doctor") {
-  const sessionId = `smoke-${label}-${Date.now()}`;
   const queueId = `smoke-${label}`;
   createQueue({ id: queueId, name: `Smoke ${label}` });
-  const result = addItem(sessionId, "Smoke test item deletion", false, queueId);
+  const result = addItem("Smoke test item deletion", false, queueId);
   const itemId = result.id;
-  const removed = removeItem(sessionId, itemId, queueId);
+  const removed = removeItem(itemId, queueId);
   const itemRow = db.prepare("SELECT 1 FROM items WHERE id = ?").get(itemId);
-  const sessionRows = db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
   db.prepare("DELETE FROM queues WHERE id = ?").run(queueId);
   return {
-    ok: !!removed && !itemRow && sessionRows.changes === 1,
+    ok: !!removed && !itemRow,
     itemId,
   };
 }

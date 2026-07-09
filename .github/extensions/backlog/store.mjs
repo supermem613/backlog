@@ -11,8 +11,6 @@ import {
   attachItemPorContext,
   getItemPorContext,
   removeItemPorContext,
-  setQueueLoopState,
-  getQueueLoopState,
   setItemLease as setItemLeaseDb,
   getItemLease as getItemLeaseDb,
 } from "./db.mjs";
@@ -33,20 +31,6 @@ export class Store {
 
   setItemGate(input) {
     return setItemGate(input);
-  }
-
-  setLoopState(input) {
-    const queueId = input?.queueId || input?.targetId;
-    if (!queueId) throw new Error("queue id required");
-    createQueue({ id: queueId, name: queueId, description: null, metadata: {} });
-    return setQueueLoopState({
-      queueId,
-      status: input.status,
-      continuationsFired: input.continuationsFired,
-      inFlight: input.inFlight,
-      actor: input.actor,
-      correlationId: input.correlationId,
-    });
   }
 
   setLease(input) {
@@ -136,11 +120,6 @@ export class Store {
   getQueue(queueIdOrName) {
     if (!queueIdOrName) return null;
     return this.database.prepare("SELECT * FROM queues WHERE id = ? OR name = ?").get(queueIdOrName, queueIdOrName) || null;
-  }
-
-  getLoopState(targetId) {
-    if (!targetId) return null;
-    return getQueueLoopState(targetId);
   }
 
   getLease(targetIdOrSpec) {

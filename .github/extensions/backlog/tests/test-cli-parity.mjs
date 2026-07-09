@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createQueue, ensureSession } from "../db.mjs";
+import { createQueue } from "../db.mjs";
 import { addItem, markDone } from "../items.mjs";
 import { bindQueueScope, describeBacklogStatus } from "../queue-resolver.mjs";
 import { parseBacklogCommand, handleBacklogCommand } from "../commands.mjs";
@@ -21,13 +21,10 @@ process.on("exit", () => {
 
 const queue = createQueue({ id: "queue-cli-parity", name: "CLI Parity Queue" });
 bindQueueScope(queue, tempDir, { preferred: true });
-const sessionId = "cli-parity-session";
-ensureSession(sessionId);
-const pendingItem = addItem(sessionId, "pending parity item", false, queue.id);
-markDone(sessionId, pendingItem.id, queue.id);
+const pendingItem = addItem("pending parity item", false, queue.id);
+markDone(pendingItem.id, queue.id);
 
 const expectedStatus = describeBacklogStatus({
-  sessionId,
   cwd: tempDir,
   queues: [queue],
 });
@@ -78,18 +75,16 @@ if (statusResult.error) {
   assertEqual(queueParsed.cmd, "queue", "queue subcommands should share the queue handler");
   const initParsed = parseBacklogCommand("init");
   assertEqual(initParsed.cmd, "init", "init should share the queue binding handler");
-  const loopParsed = parseBacklogCommand("loop status");
-  assertEqual(loopParsed.cmd, "loop", "loop subcommands should share the loop handler");
   const doctorParsed = parseBacklogCommand("doctor");
   assertEqual(doctorParsed.cmd, "doctor", "doctor should share the shared slash handler");
   assert(getCommandDefinition("backlog"), "extension root /backlog command metadata stays registered");
   assertEqual(
     getSlashCommandNames().join(","),
-    "add,list,done,remove,edit,top,up,down,next,pending,status,init,sessions,prune,clear,queue,show,approve,review,backup,restore,loop,doctor",
+    "add,list,done,remove,edit,top,up,down,next,pending,status,init,clear,queue,show,approve,review,backup,restore,doctor",
     "CLI-visible shared commands match the runnable slash subcommand surface",
   );
 
-  const sharedHandlerCheck = await handleBacklogCommand(sessionId, "doctor");
+  const sharedHandlerCheck = await handleBacklogCommand("doctor");
   assert(typeof sharedHandlerCheck === "string", "shared slash handler should return a string response for doctor");
 
   const initResult = spawnSync(process.execPath, [cliPath, "init", "cli-init-queue", "CLI Init Queue", "--cwd", initDir, "--db-dir", sandboxDir, "--json"], {
@@ -121,7 +116,7 @@ if (statusResult.error) {
   } catch (error) {
     assert(false, `add stdout should be parseable JSON: ${error.message}`);
   }
-  const editableId = cliAddEnvelope?.data?.output?.match(/\[id: ([^\]]+)\]/)?.[1];
+  const editableId = cliAddEnvelope?.data?.output?.match(/\[id: ([^,\]]+)/)?.[1];
   assert(editableId, `add output should include an editable id, got: ${cliAddEnvelope?.data?.output}`);
   const cliEditResult = spawnSync(process.execPath, [cliPath, "edit", editableId || "missing", "edited cli item", "--cwd", initDir, "--db-dir", sandboxDir, "--json"], {
     cwd: process.cwd(),
