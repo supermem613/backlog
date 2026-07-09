@@ -107,7 +107,9 @@ Items can be referenced by short ID (e.g. `t1a2b3`) or by position number (e.g. 
 Use `/backlog list` to see the current workspace queue, or `/backlog list <queue-id>` to inspect a specific queue from `/backlog queue list`. The first listed item is the next pending item.
 Use `/backlog move <item> <position|top|bottom>` to reorder a queue.
 
-`/backlog status` is read-only. It reports the selected `queueId`, queue bindings, item counts, match type (`exact`, `worktree-origin`, `ancestor`, or `default`), and any ambiguous candidates. Use it to confirm what queue Copilot CLI will operate on before adding, draining, or starting work.
+The current workspace queue is the workspace-resolved queue for the command's `cwd`. Backlog is passive: it stores queue items and does not track live sessions or push work into Copilot.
+
+`/backlog status` is read-only. It reports the selected `queueId`, queue bindings, item counts, match type (`exact`, `worktree-origin`, `ancestor`, or `default`), and any ambiguous candidates. Use it to confirm what workspace-resolved queue Copilot CLI will operate on before adding, draining, or starting work.
 
 Run `/backlog init` or `backlog init` from a repo directory to create or reuse a queue named after that directory and bind it. For `C:\Users\marcusm\repos\soda`, the single command is `backlog init`, which creates queue `soda` and binds that local repo path. You can override the id and name with `backlog init <queue-id> <name>`.
 
