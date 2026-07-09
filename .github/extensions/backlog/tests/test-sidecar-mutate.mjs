@@ -7,6 +7,10 @@ import { buildSnapshot, handleHttp, sidecarState } from "../sidecar.mjs";
 const queueId = "sidecar-mutate-queue";
 createQueue({ id: queueId, name: "Sidecar Mutate" });
 const { id } = addItem("delete me from sidecar", false, queueId);
+const moveQueueId = "sidecar-move-queue";
+createQueue({ id: moveQueueId, name: "Sidecar Move" });
+const movable = addItem("move me from sidecar", false, moveQueueId);
+const displaced = addItem("displace me from sidecar", false, moveQueueId);
 sidecarState.role = "owner";
 sidecarState.token = "test-token";
 const events = [];
@@ -77,6 +81,13 @@ async function postMutate(body) {
 }
 
 assertEqual(buildSnapshot().sessions.length, 0, "snapshot starts without live peers");
+
+const moveRes = await postMutate({ op: "move", id: displaced.id, target: 1, queueId: moveQueueId });
+assertEqual(moveRes.statusCode, 200, "move mutation succeeds");
+assertEqual(JSON.parse(moveRes.body).ok, true, "move returns ok");
+assertEqual(db.prepare("SELECT position FROM items WHERE id = ?").get(displaced.id).position, 1, "move mutation updates position");
+assertEqual(db.prepare("SELECT position FROM items WHERE id = ?").get(movable.id).position, 2, "move mutation shifts the displaced item");
+db.prepare("DELETE FROM items WHERE queue_id = ?").run(moveQueueId);
 
 const res = await postMutate({ op: "delete", id, queueId });
 assertEqual(res.statusCode, 200, "delete mutation succeeds");

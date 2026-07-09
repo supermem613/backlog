@@ -7,7 +7,6 @@
  * Module layout:
  *   db.mjs       — DatabaseSync + schema + migrations + queue helpers
  *   items.mjs    — item CRUD + position management
- *   prompt.mjs   — engage prompt + reminder banner strings
  *   sidecar.mjs  — singleton viewer (HTTP+WS), owner/peer election, browser launch
  *   commands.mjs — /backlog slash command parser + dispatcher
  *   extension.mjs (this file) — joinSession bootstrap, tools, signal handlers
@@ -19,7 +18,7 @@ import {
   initBacklog,
   db,
 } from "./db.mjs";
-import { markDone, getTopItem, getPendingCount } from "./items.mjs";
+import { markDone } from "./items.mjs";
 import {
   setActiveSessionId,
   setSessionRef,
@@ -55,9 +54,6 @@ const joinConfig = createBacklogJoinConfig({
   getActiveSessionId: () => activeSessionId,
   log: (message, options) => session.log(message, options),
   syncSidecarVisibility,
-  getDb: () => db,
-  getTopItem,
-  getPendingCount,
   markDone,
   handleBacklogCommand: createExtensionCommandHandler({
     handleBacklogCommand,
@@ -67,7 +63,7 @@ assertDeprivilegedJoinConfig(joinConfig);
 
 const session = await joinSession(joinConfig);
 
-// session is now available — wire it into sidecar so /api/engage can call session.send.
+// session is now available — wire it into sidecar for passive viewer state.
 setSessionRef(session);
 setActiveSession(session.sessionId || session.id);
 

@@ -5,7 +5,7 @@ import { db, createQueue } from "../db.mjs";
 import { handleBacklogCommand } from "../commands.mjs";
 import { bindQueueScope } from "../queue-resolver.mjs";
 import { createBacklogJoinConfig } from "../join-config.mjs";
-import { markDone, getTopItem, getPendingCount } from "../items.mjs";
+import { markDone } from "../items.mjs";
 import { sandboxDir } from "./harness.mjs";
 
 function assertResolutionBlock(result, label, expectedQueueId) {
@@ -35,8 +35,7 @@ assert(listAOut.includes("first bound item"), `list for queue A shows the bound 
 const listBOut = await handleBacklogCommand("list", { cwd: scopeB });
 assert(!listBOut.includes("first bound item"), `list for queue B should not include queue A items, got: ${listBOut}`);
 
-const nextBOut = await handleBacklogCommand("next", { cwd: scopeB });
-assertEqual(nextBOut, "Backlog is empty", `next should not see queue A items from queue B scope, got: ${nextBOut}`);
+assertEqual(listBOut, `Queue '${queueB.id}' is empty`, `list should not see queue A items from queue B scope, got: ${listBOut}`);
 
 const pendingBOut = await handleBacklogCommand("pending", { cwd: scopeB });
 assertEqual(pendingBOut, "0", `pending should ignore queue A items when resolving queue B scope, got: ${pendingBOut}`);
@@ -62,26 +61,19 @@ const joinConfig = createBacklogJoinConfig({
   getActiveSessionId: () => "auto-bound-items-session",
   log: () => {},
   syncSidecarVisibility: () => {},
-  getDb: () => db,
-  getTopItem,
-  getPendingCount,
   markDone,
   handleBacklogCommand,
 });
 
 assertEqual(
   joinConfig.tools.map((tool) => tool.name).join(","),
-  "backlog_next,backlog_list,backlog_done,backlog_status",
-  "agent tools omit automatic add/edit/remove mutation surfaces",
+  "backlog_list,backlog_done,backlog_status",
+  "agent tools omit automatic add/edit/remove and next-work surfaces",
 );
 
 const listTool = joinConfig.tools.find((tool) => tool.name === "backlog_list");
 const listToolOut = await listTool.handler({}, { sessionId: "auto-bound-items-session", cwd: scopeB });
 assertResolutionBlock(listToolOut, "backlog_list", queueB.id);
-
-const nextTool = joinConfig.tools.find((tool) => tool.name === "backlog_next");
-const nextToolOut = await nextTool.handler({}, { sessionId: "auto-bound-items-session", cwd: scopeA });
-assertResolutionBlock(nextToolOut, "backlog_next", queueA.id);
 
 const doneTool = joinConfig.tools.find((tool) => tool.name === "backlog_done");
 const doneToolOut = await doneTool.handler({ ref: "1" }, { sessionId: "auto-bound-items-session", cwd: scopeA });

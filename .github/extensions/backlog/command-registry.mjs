@@ -16,8 +16,14 @@ const commandDefinitions = [
   {
     name: "list",
     scope: "slash",
-    description: "List pending backlog items.",
-    usage: "/backlog list",
+    description: "List pending items in the resolved or named queue.",
+    usage: "/backlog list [queue-id]",
+  },
+  {
+    name: "move",
+    scope: "slash",
+    description: "Move an item to a queue position.",
+    usage: "/backlog move <id-or-position> <position|top|bottom>",
   },
   {
     name: "done",
@@ -36,30 +42,6 @@ const commandDefinitions = [
     scope: "slash",
     description: "Edit a backlog item description.",
     usage: "/backlog edit <id-or-position> <new-description>",
-  },
-  {
-    name: "top",
-    scope: "slash",
-    description: "Move an item to the top of the queue.",
-    usage: "/backlog top <id-or-position>",
-  },
-  {
-    name: "up",
-    scope: "slash",
-    description: "Move an item up one slot.",
-    usage: "/backlog up <id-or-position>",
-  },
-  {
-    name: "down",
-    scope: "slash",
-    description: "Move an item down one slot.",
-    usage: "/backlog down <id-or-position>",
-  },
-  {
-    name: "next",
-    scope: "slash",
-    description: "Show the next pending item.",
-    usage: "/backlog next",
   },
   {
     name: "pending",
@@ -143,18 +125,8 @@ const commandDefinitions = [
 
 const toolDefinitions = [
   {
-    name: "backlog_next",
-    description: "Get the next pending backlog item. Call this after completing an item to check for more work.",
-    parameters: {
-      type: "object",
-      properties: {
-        cwd: { type: "string", description: "Workspace directory to inspect" },
-      },
-    },
-  },
-  {
     name: "backlog_list",
-    description: "List all pending backlog items for the resolved queue.",
+    description: "List all pending backlog items for the resolved workspace queue.",
     parameters: {
       type: "object",
       properties: {

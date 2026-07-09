@@ -1,12 +1,12 @@
 // Sidecar viewer: singleton process owns one HTTP+WS server bound to a
 // fixed port (SHARED_PORT) plus the chromeless browser window. Other
 // extension processes register as clients over /peer WS and forward live
-// routing info, mutations, and engage callbacks through the owner.
+// routing info and mutations through the owner.
 //
 // Roles:
 //   owner  — bound the fixed port; runs server; spawns viewer; tracks peers.
 //   client — connected to owner over WS; mutates DB locally then asks owner
-//            to refresh; receives engage requests and calls session.send().
+//            to refresh.
 //
 // All processes share a queue DB in WAL mode. Clients still mutate the DB
 // themselves. Peer messages only carry live routing metadata, not backlog data.
@@ -23,15 +23,10 @@ import * as net_module from "node:net";
 import { db, BACKLOG_DIR, getItemPorContext } from "./db.mjs";
 import {
   addItem,
-  moveTop,
-  moveUp,
-  moveDown,
+  moveItem,
   editItem,
   removeItem,
-  getTopItem,
-  resolveItemRef,
 } from "./items.mjs";
-import { makeEngagePrompt } from "./prompt.mjs";
 import { getRuntimeInfo } from "./doctor.mjs";
 import { listHumanDecisions } from "./review-channel.mjs";
 
@@ -93,13 +88,8 @@ export const sidecarState = {
   forceOpen: false,
   viewerSuppressed: false,
   programmaticClose: false,
-  // sessionId -> itemId currently dispatched for engagement. Set when an
-  // engage prompt is sent; cleared when that item is markDone'd / removed
-  // / no longer pending. Drives the viewer's "engaging…" badge.
-  engaging: new Map(),
   // sessionId -> "idle" | "busy". The agent's activity state, derived from
-  // SDK events and bumped to "busy" immediately when we programmatically
-  // inject an engage prompt via session.send.
+  // SDK events.
   // Defaults to "idle" on first sighting of a session.
   sessionState: new Map(),
   deferViewerClose: 0,
@@ -280,7 +270,6 @@ export function buildSnapshot(activeSessionIdHint) {
       repo: peer.repo || null,
       branch: peer.branch || null,
       live: true,
-      engagingId: sidecarState.engaging.get(sid) || null,
       state: sidecarState.sessionState.get(sid) || "idle",
       items: [],
     });
@@ -522,7 +511,6 @@ function handlePeerWsUpgrade(req, socket) {
     } else if (msg.type === "unregister") {
       if (registeredSid) {
         sidecarState.peers.delete(registeredSid);
-        sidecarState.engaging.delete(registeredSid);
         sidecarState.sessionState.delete(registeredSid);
       }
       ownerRefresh();
@@ -531,7 +519,6 @@ function handlePeerWsUpgrade(req, socket) {
   const cleanup = () => {
     if (registeredSid) {
       sidecarState.peers.delete(registeredSid);
-      sidecarState.engaging.delete(registeredSid);
       sidecarState.sessionState.delete(registeredSid);
     }
     ownerRefresh();
@@ -584,24 +571,6 @@ export async function handleHttp(req, res) {
     res.end(JSON.stringify(buildSnapshot()));
     return;
   }
-  if (req.method === "POST" && url.pathname === "/api/engage") {
-    let body;
-    try { body = await readJsonBody(req); }
-    catch { res.writeHead(400); res.end("bad body"); return; }
-    if (body.token !== sidecarState.token) { res.writeHead(401); res.end("unauthorized"); return; }
-    const sid = body.peerId;
-    if (!sid) { res.writeHead(400); res.end("missing peerId"); return; }
-    // Engage requires a live peer (or owner-self) to call session.send.
-    const isLive = sid === sidecarState.activeSessionId || sidecarState.peers.get(sid)?.socket;
-    if (!isLive) { res.writeHead(409); res.end("session offline"); return; }
-    const item = resolveItemRef(body.id, body.queueId);
-    if (!item) { res.writeHead(404); res.end("item not found"); return; }
-    const dispatched = engageItem(sid, item);
-    if (!dispatched) { res.writeHead(503); res.end("session not reachable"); return; }
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, id: item.id }));
-    return;
-  }
   if (req.method === "POST" && url.pathname === "/api/mutate") {
     deferViewerCloseUntilResponseFinishes(res);
     let body;
@@ -612,8 +581,15 @@ export async function handleHttp(req, res) {
     const queueId = body.queueId || null;
     switch (body.op) {
       case "add": result = addItem(body.description || "", false, queueId); break;
-      case "up":     result = moveUp(body.id, queueId); break;
-      case "down":   result = moveDown(body.id, queueId); break;
+      case "move":
+        try {
+          result = moveItem(body.id, body.target, queueId);
+        } catch (e) {
+          res.writeHead(400);
+          res.end(e.message);
+          return;
+        }
+        break;
       case "edit":   result = editItem(body.id, body.description, queueId); break;
       case "delete": result = removeItem(body.id, queueId); break;
       default: res.writeHead(400); res.end("bad op"); return;
@@ -624,43 +600,6 @@ export async function handleHttp(req, res) {
     return;
   }
   res.writeHead(404); res.end("not found");
-}
-
-// Route an engage prompt to the right session: directly if the target is
-// the owner's own session, otherwise via the peer WS to that client.
-// Returns true if the prompt was dispatched, false if no live target exists.
-function routeEngage(sessionId, { prompt }) {
-  if (sidecarState.role !== "owner") return false;
-  if (sessionId === sidecarState.activeSessionId) {
-    setTimeout(() => {
-      try { sidecarState.sessionRef?.send({ prompt }); }
-      catch (e) { try { sidecarState.sessionRef?.log(`engage failed: ${e.message}`, { level: "error" }); } catch {} }
-    }, 0);
-    return true;
-  }
-  const peer = sidecarState.peers.get(sessionId);
-  if (!peer?.socket) return false;
-  try {
-    wsSendText(peer.socket, JSON.stringify({ type: "engage", sessionId, prompt }));
-    return true;
-  } catch { return false; }
-}
-
-// Promote `item` to position 1 and dispatch the standard engage prompt.
-// Marks the item as the live peer's currently-engaged item so the viewer
-// can render the "engaging…" badge.
-function engageItem(sessionId, item) {
-  moveTop(item.id, item.queue_id);
-  sidecarState.engaging.set(sessionId, item.id);
-  const prompt = makeEngagePrompt(item);
-  const dispatched = routeEngage(sessionId, { itemId: item.id, prompt });
-  if (!dispatched) {
-    sidecarState.engaging.delete(sessionId);
-  } else {
-    setSessionState(sessionId, "busy");
-  }
-  ownerRefresh(sessionId);
-  return dispatched;
 }
 
 // Update a session's busy/idle state. Owner stores it directly. Clients
@@ -875,15 +814,7 @@ function connectPeer() {
     upgraded = true;
     sidecarState.peerSocket = sock;
     registerActiveSession();
-    attachWsTextReader(sock, (text) => {
-      let msg; try { msg = JSON.parse(text); } catch { return; }
-      if (msg.type === "engage" && msg.prompt) {
-        setTimeout(() => {
-          try { sidecarState.sessionRef?.send({ prompt: msg.prompt }); }
-          catch (e) { try { sidecarState.sessionRef?.log(`engage failed: ${e.message}`, { level: "error" }); } catch {} }
-        }, 0);
-      }
-    });
+    attachWsTextReader(sock, () => {});
   };
 
   sock.once("connect", () => {

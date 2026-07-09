@@ -8,7 +8,6 @@ import {
   SCHEMA_VERSION,
   createSchemaEnvelope,
   formatCommandHelp,
-  getCommandDefinition,
   getSlashCommandNames,
 } from "./command-registry.mjs";
 
@@ -18,7 +17,6 @@ function parseCliArgs(argv) {
   const parsed = {
     cwd: null,
     dbDir: null,
-    json: false,
     help: false,
     command: null,
     args: [],
@@ -42,10 +40,6 @@ function parseCliArgs(argv) {
     }
     if (argument.startsWith("--db-dir=")) {
       parsed.dbDir = argument.slice("--db-dir=".length);
-      continue;
-    }
-    if (argument === "--json") {
-      parsed.json = true;
       continue;
     }
     if (argument === "--help" || argument === "-h") {
@@ -93,53 +87,8 @@ function resolveDatabaseDir(explicitCwd, explicitDbDir = null) {
   return join(homedir(), ".backlog");
 }
 
-function toDisplayValue(entry) {
-  if (typeof entry === "string") return entry;
-  if (entry === null || entry === undefined) return "";
-  if (typeof entry === "object") {
-    return JSON.stringify(entry, null, 2);
-  }
-  return String(entry);
-}
-
-function emitHumanResponse(envelope) {
-  if (envelope.ok && envelope.data?.help) {
-    process.stdout.write(`${envelope.data.help}\n`);
-    return;
-  }
-  if (envelope.ok && envelope.data?.output) {
-    process.stdout.write(`${envelope.data.output}\n`);
-    return;
-  }
-  if (envelope.ok && envelope.data?.message) {
-    process.stdout.write(`${envelope.data.message}\n`);
-    return;
-  }
-  if (envelope.ok && envelope.data && typeof envelope.data === "object" && !Array.isArray(envelope.data)) {
-    const hasMeaningfulKeys = Object.keys(envelope.data).length > 0;
-    if (hasMeaningfulKeys) {
-      process.stdout.write(`${JSON.stringify(envelope.data, null, 2)}\n`);
-      return;
-    }
-  }
-  if (!envelope.ok && envelope.data?.error) {
-    process.stderr.write(`${envelope.data.error}\n`);
-    return;
-  }
-  process.stdout.write(`${toDisplayValue(envelope.data)}\n`);
-}
-
 export async function runCli(argv = process.argv.slice(2)) {
   const parsed = parseCliArgs(argv);
-  const databaseDir = resolveDatabaseDir(parsed.cwd, parsed.dbDir);
-  initBacklog(databaseDir);
-
-  const [{ handleBacklogCommand }, { formatDoctorReport }, { describeBacklogStatus }] = await Promise.all([
-    import("./commands.mjs"),
-    import("./doctor.mjs"),
-    import("./queue-resolver.mjs"),
-  ]);
-
   const commandName = parsed.command || "help";
   const startTime = Date.now();
   let envelope = {
@@ -151,6 +100,13 @@ export async function runCli(argv = process.argv.slice(2)) {
   };
 
   try {
+    const databaseDir = resolveDatabaseDir(parsed.cwd, parsed.dbDir);
+    initBacklog(databaseDir);
+
+    const [{ handleBacklogCommand }] = await Promise.all([
+      import("./commands.mjs"),
+    ]);
+
     if (parsed.help && commandName !== "help") {
       const commandHelp = formatCommandHelp(commandName);
       envelope.data = { help: commandHelp };
@@ -183,19 +139,21 @@ export async function runCli(argv = process.argv.slice(2)) {
     process.exitCode = 1;
   }
 
-  if (parsed.json) {
-    process.stdout.write(`${JSON.stringify(envelope)}\n`);
-    return envelope;
-  }
-
-  emitHumanResponse(envelope);
+  process.stdout.write(`${JSON.stringify(envelope)}\n`);
   return envelope;
 }
 
 const isExecutedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isExecutedDirectly) {
   runCli(process.argv.slice(2)).catch((error) => {
-    process.stderr.write(`${error?.message || String(error)}\n`);
+    const envelope = {
+      ok: false,
+      command: "backlog",
+      schemaVersion: SCHEMA_VERSION,
+      data: { error: error?.message || String(error) },
+      timingMs: 0,
+    };
+    process.stdout.write(`${JSON.stringify(envelope)}\n`);
     process.exitCode = 1;
   });
 }

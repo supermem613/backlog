@@ -1,5 +1,6 @@
 import { resolveItemCommandContext } from "./queue-resolver.mjs";
 import { getCommandDefinition, getToolDefinitions } from "./command-registry.mjs";
+import { listPendingItems } from "./items.mjs";
 
 const ELEVATING_HANDLER_KEYS = [
   "onPermissionRequest",
@@ -49,9 +50,6 @@ export function createBacklogJoinConfig({
   getActiveSessionId,
   log,
   syncSidecarVisibility,
-  getDb,
-  getTopItem,
-  getPendingCount,
   markDone,
   handleBacklogCommand,
 }) {
@@ -74,25 +72,6 @@ export function createBacklogJoinConfig({
 
     tools: [
       {
-        ...toolMetadata["backlog_next"],
-        handler: async (args, invocation) => {
-          const sid = invocation?.sessionId || getActiveSessionId() || "default";
-          const cwd = getInvocationCwd(args, invocation);
-          const queueContext = resolveItemCommandContext({ cwd });
-          if (queueContext.error) {
-            syncSidecarVisibility(sid);
-            return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false };
-          }
-          const item = getTopItem(queueContext.queueId);
-          if (!item) {
-            syncSidecarVisibility(sid);
-            return { message: "Backlog is empty — no pending items.", resolution: queueContext.resolution, queueId: queueContext.queueId, next: null, id: null, totalPending: 0 };
-          }
-          const count = getPendingCount(queueContext.queueId);
-          return { message: `Next: [${item.id}] ${item.description}`, resolution: queueContext.resolution, queueId: queueContext.queueId, next: item.description, id: item.id, totalPending: count };
-        },
-      },
-      {
         ...toolMetadata["backlog_list"],
         handler: async (args, invocation) => {
           const sid = invocation?.sessionId || getActiveSessionId() || "default";
@@ -103,9 +82,7 @@ export function createBacklogJoinConfig({
             return { message: queueContext.error, resolution: queueContext.resolution, queueId: queueContext.queueId, ok: false, items: [] };
           }
           syncSidecarVisibility(sid);
-          const items = getDb().prepare(
-            "SELECT id, description, position FROM items WHERE queue_id = ? AND status = ? ORDER BY position"
-          ).all(queueContext.queueId, "pending");
+          const items = listPendingItems(queueContext.queueId);
           if (items.length === 0) {
             return { message: "Backlog is empty", resolution: queueContext.resolution, queueId: queueContext.queueId, items: [] };
           }

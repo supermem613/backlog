@@ -238,7 +238,6 @@
   .card.top:hover { background: var(--bg-top-hov); }
   .card .title-row {
     display: flex; align-items: flex-start; gap: 8px;
-    cursor: pointer;
   }
   .card .title {
     flex: 1; min-width: 0;
@@ -246,14 +245,6 @@
     word-wrap: break-word; overflow-wrap: anywhere;
     user-select: none;
   }
-  .card .engage-hint {
-    font-size: 9px; letter-spacing: 0.08em;
-    color: var(--muted); text-transform: uppercase;
-    opacity: 0; transition: opacity 120ms ease;
-    align-self: center; flex-shrink: 0;
-  }
-  .card:hover .engage-hint { opacity: 0.7; }
-
   .card .meta {
     margin-top: 5px;
     font-size: 10px; color: var(--muted);
@@ -310,7 +301,6 @@
   .actions .danger:hover { background: var(--danger-soft); border-color: #5a2828; color: var(--danger); }
 
   .card.editing .title-row { cursor: default; }
-  .card.editing .engage-hint { display: none; }
   .card.editing .actions { opacity: 1; max-height: 36px; }
   .card .title-input {
     flex: 1;
@@ -326,13 +316,6 @@
     max-height: 70px;
   }
   .card .title-input:focus { outline: none; }
-
-  .card.engaging { opacity: 0.55; pointer-events: none; }
-  .card.engaging::after {
-    content: "engaging…";
-    position: absolute; right: 11px; top: 9px;
-    font-size: 10px; color: var(--accent);
-  }
 
   .partition-empty {
     margin: auto; padding: 40px 0;
@@ -557,10 +540,7 @@ function renderMain() {
     const titleEl = document.createElement("div");
     titleEl.className = "title";
     titleEl.textContent = item.description;
-    const hint = document.createElement("span");
-    hint.className = "engage-hint";
-    hint.textContent = "click to engage";
-    titleRow.append(titleEl, hint);
+    titleRow.append(titleEl);
 
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -590,8 +570,10 @@ function renderMain() {
     const actions = document.createElement("div");
     actions.className = "actions";
     actions.addEventListener("click", (e) => e.stopPropagation());
-    const upBtn = mkAction("↑", "Move up", () => mutate({ op: "up", id: item.id, queueId: queue.id }, "moved up"));
-    const downBtn = mkAction("↓", "Move down", () => mutate({ op: "down", id: item.id, queueId: queue.id }, "moved down"));
+    const upBtn = mkAction("↑", "Move up", () => mutate({ op: "move", id: item.id, target: item.position - 1, queueId: queue.id }, "moved up"));
+    upBtn.disabled = item.position <= 1;
+    const downBtn = mkAction("↓", "Move down", () => mutate({ op: "move", id: item.id, target: item.position + 1, queueId: queue.id }, "moved down"));
+    downBtn.disabled = item.position >= queue.items.length;
     const editBtn = mkAction("✎", "Edit", () => beginEdit(card, titleEl, item, queue.id));
     const spacer = document.createElement("span");
     spacer.className = "spacer";
@@ -600,10 +582,6 @@ function renderMain() {
     actions.append(upBtn, downBtn, editBtn, spacer, delBtn);
 
     card.append(titleRow, meta, contextEl, actions);
-    titleRow.addEventListener("click", () => {
-      if (!item.peer_live) { showToast("session is offline", true); return; }
-      engage(card, item.peer_id, item);
-    });
     list.appendChild(card);
   });
 }
@@ -672,19 +650,6 @@ function beginEdit(card, titleEl, item, queueId) {
     else if (e.key === "Escape") { e.preventDefault(); finish(false); }
   });
   input.addEventListener("blur", () => finish(true));
-}
-
-async function engage(card, sid, item) {
-  card.classList.add("engaging");
-  showToast("engaging " + item.id);
-  try {
-    await api("/api/engage", { peerId: sid, id: item.id, queueId: item.queue_id });
-  } catch (e) {
-    console.error(e);
-    const isOffline = /409|503/.test(e.message || "");
-    showToast(isOffline ? "session is offline" : "engage failed", true);
-    card.classList.remove("engaging");
-  }
 }
 
 async function loadInitial() {

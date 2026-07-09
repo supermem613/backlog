@@ -30,7 +30,7 @@ const expectedStatus = describeBacklogStatus({
 });
 
 const cliPath = fileURLToPath(new URL("../../../../bin/backlog.mjs", import.meta.url));
-const statusResult = spawnSync(process.execPath, [cliPath, "status", "--cwd", tempDir, "--db-dir", sandboxDir, "--json"], {
+const statusResult = spawnSync(process.execPath, [cliPath, "status", "--cwd", tempDir, "--db-dir", sandboxDir], {
   cwd: process.cwd(),
   encoding: "utf8",
 });
@@ -66,7 +66,7 @@ if (statusResult.error) {
     }
   }
 
-  const sharedCommandNames = ["add", "list", "next", "done", "remove"];
+  const sharedCommandNames = ["add", "list", "move", "done", "remove"];
   for (const sharedCommand of sharedCommandNames) {
     const parsed = parseBacklogCommand(sharedCommand);
     assertEqual(parsed.cmd, sharedCommand, `shared slash parser should recognize ${sharedCommand}`);
@@ -80,14 +80,31 @@ if (statusResult.error) {
   assert(getCommandDefinition("backlog"), "extension root /backlog command metadata stays registered");
   assertEqual(
     getSlashCommandNames().join(","),
-    "add,list,done,remove,edit,top,up,down,next,pending,status,init,clear,queue,show,approve,review,backup,restore,doctor",
+    "add,list,move,done,remove,edit,pending,status,init,clear,queue,show,approve,review,backup,restore,doctor",
     "CLI-visible shared commands match the runnable slash subcommand surface",
   );
 
   const sharedHandlerCheck = await handleBacklogCommand("doctor");
   assert(typeof sharedHandlerCheck === "string", "shared slash handler should return a string response for doctor");
 
-  const initResult = spawnSync(process.execPath, [cliPath, "init", "cli-init-queue", "CLI Init Queue", "--cwd", initDir, "--db-dir", sandboxDir, "--json"], {
+  const helpResult = spawnSync(process.execPath, [cliPath, "help", "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(helpResult.status, 0, "help command should exit 0");
+  let helpEnvelope;
+  try {
+    helpEnvelope = JSON.parse(helpResult.stdout);
+  } catch (error) {
+    assert(false, `help stdout should be parseable JSON by default: ${error.message}`);
+  }
+  if (helpEnvelope) {
+    assertEqual(helpEnvelope.ok, true, "help envelope should report ok=true");
+    assertEqual(helpEnvelope.command, "help", "help envelope should identify the command");
+    assert(/Usage: backlog <command>/.test(helpEnvelope.data.help), "help envelope should contain help text in data.help");
+  }
+
+  const initResult = spawnSync(process.execPath, [cliPath, "init", "cli-init-queue", "CLI Init Queue", "--cwd", initDir, "--db-dir", sandboxDir], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -105,7 +122,7 @@ if (statusResult.error) {
     assertEqual(initEnvelope.data.status.state, "resolved", "init envelope should include resolved status");
   }
 
-  const cliAddResult = spawnSync(process.execPath, [cliPath, "add", "editable cli item", "--cwd", initDir, "--db-dir", sandboxDir, "--json"], {
+  const cliAddResult = spawnSync(process.execPath, [cliPath, "add", "editable cli item", "--cwd", initDir, "--db-dir", sandboxDir], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -118,7 +135,7 @@ if (statusResult.error) {
   }
   const editableId = cliAddEnvelope?.data?.output?.match(/\[id: ([^,\]]+)/)?.[1];
   assert(editableId, `add output should include an editable id, got: ${cliAddEnvelope?.data?.output}`);
-  const cliEditResult = spawnSync(process.execPath, [cliPath, "edit", editableId || "missing", "edited cli item", "--cwd", initDir, "--db-dir", sandboxDir, "--json"], {
+  const cliEditResult = spawnSync(process.execPath, [cliPath, "edit", editableId || "missing", "edited cli item", "--cwd", initDir, "--db-dir", sandboxDir], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -144,7 +161,7 @@ if (statusResult.error) {
     return true;
   };
   try {
-    await runCli(["frobnicate", "--cwd", tempDir, "--db-dir", sandboxDir, "--json"]);
+    await runCli(["frobnicate", "--cwd", tempDir, "--db-dir", sandboxDir]);
   } finally {
     process.stdout.write = originalStdoutWrite;
   }
@@ -161,6 +178,16 @@ if (statusResult.error) {
     assertEqual(unknownEnvelope.command, "frobnicate", "unknown CLI commands should identify the attempted command");
     assertEqual(unknownEnvelope.data.knownCommands.join(","), getSlashCommandNames().join(","), "unknown CLI command output lists the runnable slash subcommands");
   }
+
+  const removedJsonFlag = `--${"json"}`;
+  const removedFlagResult = spawnSync(process.execPath, [cliPath, removedJsonFlag, "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(removedFlagResult.status, 1, "removed JSON flag should exit non-zero");
+  const removedFlagEnvelope = JSON.parse(removedFlagResult.stdout);
+  assertEqual(removedFlagEnvelope.ok, false, "removed JSON flag should report ok=false");
+  assertEqual(removedFlagEnvelope.command, removedJsonFlag, "removed JSON flag should be treated as an unknown command");
 }
 
 done("test-cli-parity");

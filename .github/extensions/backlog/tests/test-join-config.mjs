@@ -18,13 +18,6 @@ const dependencies = {
   getActiveSessionId: () => "test-session",
   log: () => {},
   syncSidecarVisibility: () => {},
-  getDb: () => ({
-    prepare: () => ({
-      all: () => [],
-    }),
-  }),
-  getTopItem: () => null,
-  getPendingCount: () => 0,
   markDone: () => ({ description: "done item" }),
   handleBacklogCommand: async (rawText) => {
     if (rawText === "status") return statusResolution;
@@ -44,9 +37,9 @@ assertEqual(
   "join config matches de-privileged baseline",
 );
 assertEqual(config.commands[0].name, "backlog", "backlog command is registered");
-assertEqual(config.tools.length, 4, "agent tool count matches baseline");
+assertEqual(config.tools.length, 3, "agent tool count matches baseline");
 assertEqual(config.tools.map((tool) => tool.name).join(","),
-  "backlog_next,backlog_list,backlog_done,backlog_status",
+  "backlog_list,backlog_done,backlog_status",
   "agent tool names match baseline");
 assertDeprivilegedJoinConfig(config);
 

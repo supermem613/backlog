@@ -47,9 +47,19 @@ assert(addOut.startsWith("Added: 'hello world'"), `add command returns confirmat
 
 const listOut = await handleBacklogCommand("list", { cwd: initScope });
 assert(/hello world/.test(listOut), `list shows added item, got: ${listOut}`);
+assert(listOut.startsWith("Queue 'soda' pending items:"), `list names the resolved queue, got: ${listOut}`);
+const listByQueueOut = await handleBacklogCommand("list soda");
+assert(/Queue 'soda' pending items:[\s\S]*hello world/.test(listByQueueOut), `list accepts an explicit queue id, got: ${listByQueueOut}`);
 const firstId = addOut.match(/\[id: ([^,\]]+)/)?.[1];
 const editOut = await handleBacklogCommand(`edit ${firstId} hello edited`, { cwd: initScope });
 assert(/Updated 'hello edited'/.test(editOut), `edit command updates item, got: ${editOut}`);
+await handleBacklogCommand("add second item", { cwd: initScope });
+const moveOut = await handleBacklogCommand("move 2 1", { cwd: initScope });
+assert(/Moved 'second item' to position 1/.test(moveOut), `move command repositions item, got: ${moveOut}`);
+const movedListOut = await handleBacklogCommand("list", { cwd: initScope });
+assert(/#1 \[[^\]]+\] second item/.test(movedListOut), `list reflects moved item order, got: ${movedListOut}`);
+const missingQueueOut = await handleBacklogCommand("list missing-queue");
+assert(/Queue 'missing-queue' not found/.test(missingQueueOut), `list reports unknown explicit queue ids, got: ${missingQueueOut}`);
 
 const gatedId = firstId;
 db.prepare("UPDATE items SET status = ? WHERE id = ?").run("proposed", gatedId);

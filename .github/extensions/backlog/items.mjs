@@ -1,4 +1,4 @@
-// Item CRUD: add, mark done, remove, move, edit. Position management
+// Item CRUD: add, list, mark done, remove, move, edit. Position management
 // is queue-scoped, and every ordering mutation keeps pending positions dense.
 
 import {
@@ -12,7 +12,6 @@ import {
   removeItemPorContext as removePorContext,
 } from "./db.mjs";
 import {
-  sidecarState,
   sidecarBroadcast,
   clearViewerSuppression,
 } from "./sidecar.mjs";
@@ -83,6 +82,13 @@ export function getTopItem(queueId) {
   ).get(queue, "pending");
 }
 
+export function listPendingItems(queueId) {
+  const queue = normalizeQueueId(queueId);
+  return db.prepare(
+    "SELECT id, description, position FROM items WHERE queue_id = ? AND status = ? ORDER BY position"
+  ).all(queue, "pending");
+}
+
 export function addItem(description, isTop = false, queueId) {
   const queue = normalizeQueueId(queueId);
   const out = tx(() => {
@@ -117,12 +123,7 @@ export function markDone(ref, queueId) {
     reorderPositions(queue);
     return it;
   });
-  if (item) {
-    for (const [sid, engagingItemId] of sidecarState.engaging) {
-      if (engagingItemId === item.id) sidecarState.engaging.delete(sid);
-    }
-    sidecarBroadcast();
-  }
+  if (item) sidecarBroadcast();
   return item;
 }
 
@@ -136,12 +137,7 @@ export function removeItem(ref, queueId) {
     reorderPositions(queue);
     return it;
   });
-  if (item) {
-    for (const [sid, engagingItemId] of sidecarState.engaging) {
-      if (engagingItemId === item.id) sidecarState.engaging.delete(sid);
-    }
-    sidecarBroadcast();
-  }
+  if (item) sidecarBroadcast();
   return item;
 }
 
@@ -156,53 +152,39 @@ export function clearQueueItems(queueId) {
   return result;
 }
 
-export function moveTop(ref, queueId) {
-  const queue = normalizeQueueId(queueId);
-  const item = tx(() => {
-    const it = resolveItemRef(ref, queue);
-    if (!it) return null;
-    if (it.position === 1) return it;
-    db.prepare(
-      "UPDATE items SET position = position + 1 WHERE queue_id = ? AND status = ? AND position < ?"
-    ).run(queue, "pending", it.position);
-    db.prepare("UPDATE items SET position = 1 WHERE id = ?").run(it.id);
-    reorderPositions(queue);
-    return it;
-  });
-  if (item) sidecarBroadcast();
-  return item;
+function resolveMoveTarget(target, pendingCount) {
+  const value = String(target || "").trim().toLowerCase();
+  if (value === "top") return 1;
+  if (value === "bottom" || value === "end" || value === "last") return pendingCount;
+  if (!/^\d+$/.test(value)) {
+    throw new Error("Move target must be a position number, 'top', or 'bottom'");
+  }
+  const position = parseInt(value, 10);
+  if (position < 1 || position > pendingCount) {
+    throw new Error(`Move target must be between 1 and ${pendingCount}`);
+  }
+  return position;
 }
 
-export function moveUp(ref, queueId) {
+export function moveItem(ref, target, queueId) {
   const queue = normalizeQueueId(queueId);
   const item = tx(() => {
     const it = resolveItemRef(ref, queue);
-    if (!it || it.position === 1) return it;
-    const above = db.prepare(
-      "SELECT * FROM items WHERE queue_id = ? AND status = ? AND position = ?"
-    ).get(queue, "pending", it.position - 1);
-    if (above) {
-      db.prepare("UPDATE items SET position = ? WHERE id = ?").run(it.position, above.id);
-      db.prepare("UPDATE items SET position = ? WHERE id = ?").run(it.position - 1, it.id);
+    if (!it || it.status !== "pending") return null;
+    const nextPosition = resolveMoveTarget(target, getPendingCount(queue));
+    if (it.position === nextPosition) return { ...it, position: nextPosition };
+    if (nextPosition < it.position) {
+      db.prepare(
+        "UPDATE items SET position = position + 1 WHERE queue_id = ? AND status = ? AND position >= ? AND position < ?"
+      ).run(queue, "pending", nextPosition, it.position);
+    } else {
+      db.prepare(
+        "UPDATE items SET position = position - 1 WHERE queue_id = ? AND status = ? AND position > ? AND position <= ?"
+      ).run(queue, "pending", it.position, nextPosition);
     }
-    return it;
-  });
-  if (item) sidecarBroadcast();
-  return item;
-}
-
-export function moveDown(ref, queueId) {
-  const queue = normalizeQueueId(queueId);
-  const item = tx(() => {
-    const it = resolveItemRef(ref, queue);
-    if (!it) return null;
-    const below = db.prepare(
-      "SELECT * FROM items WHERE queue_id = ? AND status = ? AND position = ?"
-    ).get(queue, "pending", it.position + 1);
-    if (!below) return it;
-    db.prepare("UPDATE items SET position = ? WHERE id = ?").run(it.position, below.id);
-    db.prepare("UPDATE items SET position = ? WHERE id = ?").run(it.position + 1, it.id);
-    return it;
+    db.prepare("UPDATE items SET position = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(nextPosition, it.id);
+    reorderPositions(queue);
+    return { ...it, position: nextPosition };
   });
   if (item) sidecarBroadcast();
   return item;

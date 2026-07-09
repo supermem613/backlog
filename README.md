@@ -1,8 +1,8 @@
 # backlog
 
-A GitHub Copilot CLI extension that gives each workspace a **persistent queue backlog** with deterministic slash commands, in-conversation tools the agent can call, an agentic-first `backlog` CLI, and a chromeless sidecar viewer for one-click control.
+A GitHub Copilot CLI extension that gives each workspace a **persistent queue backlog** with deterministic slash commands, passive in-conversation tools the agent can call, an agentic-first `backlog` CLI, and a chromeless sidecar viewer for queue control.
 
-The agent and the human share the same queue: you can `/backlog add` something while the agent is working, the agent can call `backlog_next` after completing a step to pick up the next item, and the sidecar window shows a live, click-to-engage queue list.
+Backlog is passive queue state. You can `/backlog add` something while the agent is working, inspect the queue with `/backlog list`, and use the sidecar window to view or edit items without injecting prompts into the active session.
 
 Backlog persists queues and items in a SQLite database at `~/.backlog/backlog.db` (zero deps — uses Node 24's built-in `node:sqlite`), so items survive restarts without storing Copilot session rows.
 
@@ -81,14 +81,11 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 ```
 /backlog add <description>          # append a new item
 /backlog add --top <description>    # add as position 1
-/backlog list                       # show pending items
+/backlog list [queue-id]            # show pending items in the resolved or named queue
+/backlog move <id-or-position> <position|top|bottom> # reorder an item
 /backlog done <id-or-position>      # mark complete
 /backlog remove <id-or-position>    # delete without completing
 /backlog edit <id-or-position> <new-description>
-/backlog top <id-or-position>       # move to position 1
-/backlog up <id-or-position>        # move up one position
-/backlog down <id-or-position>      # move down one position
-/backlog next                       # show the top item
 /backlog pending                    # count of pending items
 /backlog status                     # inspect queue binding for this workspace
 /backlog init [queue-id] [name]     # create or bind a queue for this workspace
@@ -107,6 +104,8 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 ```
 
 Items can be referenced by short ID (e.g. `t1a2b3`) or by position number (e.g. `2`).
+Use `/backlog list` to see the current workspace queue, or `/backlog list <queue-id>` to inspect a specific queue from `/backlog queue list`. The first listed item is the next pending item.
+Use `/backlog move <item> <position|top|bottom>` to reorder a queue.
 
 `/backlog status` is read-only. It reports the selected `queueId`, queue bindings, item counts, match type (`exact`, `worktree-origin`, `ancestor`, or `default`), and any ambiguous candidates. Use it to confirm what queue Copilot CLI will operate on before adding, draining, or starting work.
 
@@ -119,24 +118,23 @@ Run `/backlog init` or `backlog init` from a repo directory to create or reuse a
 The package also installs a `backlog` CLI that mirrors the slash command surface for automation and local tests:
 
 ```
-backlog status --json
+backlog status
 backlog init
 backlog add "write the next test" --cwd C:\path\to\repo
-backlog schema --json
+backlog schema
 ```
 
-Use `--cwd <path>` to resolve the queue for a workspace directory. Use `--db-dir <path>` in tests or automation when you need an isolated backlog database. `--json` writes a stable envelope with `ok`, `command`, `schemaVersion`, `data`, and `timingMs`.
+Use `--cwd <path>` to resolve the queue for a workspace directory. Use `--db-dir <path>` in tests or automation when you need an isolated backlog database. Every CLI command writes a stable JSON envelope with `ok`, `command`, `schemaVersion`, `data`, and `timingMs`.
 
 ### Agent-callable tools
 
-The agent automatically gets these tools and uses them naturally:
+The agent automatically gets these passive tools:
 
-- `backlog_next` — fetch the top pending item; the agent calls this after completing a step to know what's next.
 - `backlog_list` — list all pending items.
 - `backlog_done` — mark an item complete by id or position.
 - `backlog_status` — inspect which queue is bound to the current workspace.
 
-Tools accept `cwd` when the agent needs to inspect or operate on a specific workspace. If no `cwd` is available, or if no queue binding resolves for that workspace, item operations fail closed instead of silently using a fallback queue. Add, edit, and remove stay explicit user actions through `/backlog ...` or `backlog ...`, not automatic agent-callable tools.
+Tools accept `cwd` when the agent needs to inspect or operate on a specific workspace. If no `cwd` is available, or if no queue binding resolves for that workspace, item operations fail closed instead of silently using a fallback queue. Add, edit, remove, move, and next-work selection stay explicit user actions through `/backlog ...` or `backlog ...`, not automatic agent-callable tools.
 
 ### Permission prompts
 
@@ -144,7 +142,7 @@ Backlog avoids elevated extension capabilities: it does not skip tool permission
 
 ### Sidecar viewer
 
-`/backlog show` opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer groups work by explicit queue, lets you click any item to ask the active agent to engage on it, and exposes a viewer refresh control.
+`/backlog show` opens a chromeless sidecar window — `msedge --app=` on Windows; falls back to the default browser elsewhere. The viewer groups work by explicit queue and exposes passive add, edit, reorder, delete, and refresh controls.
 
 The top bar shows the loaded package version, git commit, and storage status. Hover it to see the exact extension and package paths.
 
