@@ -232,6 +232,8 @@ export function writeLock(extra = {}) {
     ownerPid: process.pid,
     startedAt: extra.startedAt || sidecarState.ownerStartedAt || new Date().toISOString(),
     heartbeatAt: new Date().toISOString(),
+    viewerSuppressed: !!sidecarState.viewerSuppressed,
+    forceOpen: !!sidecarState.forceOpen,
   });
   const tmp = lockPath() + "." + process.pid + ".tmp";
   try {
@@ -623,8 +625,15 @@ function becomeOwner(server) {
   // Inherit token from the lock so a viewer/browser whose URL still has the
   // previous token can reconnect transparently. Only mint a fresh token
   // when the lock is genuinely missing (clean boot, no failover).
-  sidecarState.token = readLock()?.token || randomBytes(16).toString("hex");
+  const inheritedLock = readLock();
+  sidecarState.token = inheritedLock?.token || randomBytes(16).toString("hex");
   sidecarState.ownerStartedAt = new Date().toISOString();
+  // Restore the user's viewer visibility intent from the shared lock so a
+  // promoted owner keeps a user-closed window closed and a shown window open.
+  // An older lock without these fields is treated as not suppressed and not
+  // forced open, which matches a clean boot.
+  sidecarState.viewerSuppressed = inheritedLock?.viewerSuppressed === true;
+  sidecarState.forceOpen = inheritedLock?.forceOpen === true;
   server.on("request", (req, res) => {
     handleHttp(req, res).catch(() => {
       try { res.writeHead(500); res.end("server error"); } catch {}

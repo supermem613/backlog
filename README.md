@@ -148,7 +148,7 @@ Backlog avoids elevated extension capabilities: it does not skip tool permission
 
 The top bar shows the loaded package version, git commit, and storage status. Hover it to see the exact extension and package paths.
 
-A single sidecar window is shared across **all** Copilot CLI sessions on the machine — owner election happens via a lock file at `~/.backlog/viewer.lock`. If the owning session goes away, another active session takes over automatically.
+A single sidecar window is shared across **all** Copilot CLI sessions on the machine — owner election happens via a lock file at `~/.backlog/viewer.lock`. If the owning session goes away, another active session takes over automatically. When you close the viewer window it stays closed across that handoff: a session taking over ownership will not reopen it. It reopens only when a new pending item is added or you run `/backlog show`.
 
 ## Develop
 
