@@ -121,6 +121,10 @@ export async function runCli(argv = process.argv.slice(2)) {
     } else if (getSlashCommandNames().includes(commandName)) {
       const rawText = [commandName, ...parsed.args].join(" ").trim();
       const result = await handleBacklogCommand(rawText, { cwd: parsed.cwd || process.cwd() });
+      if (result && typeof result === "object" && result.ok === false) {
+        envelope.ok = false;
+        delete result.ok;
+      }
       envelope.data = typeof result === "string" ? { output: result } : result;
     } else {
       envelope.ok = false;

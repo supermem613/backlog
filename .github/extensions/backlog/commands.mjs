@@ -51,6 +51,15 @@ function formatItems(rows, queueId) {
   return [`Queue '${queueId}' pending items:`, ...rows.map((item) => `#${item.position} [${item.id}] ${item.description}`)].join("\n");
 }
 
+// Item commands return structured envelopes so the CLI can expose machine data
+// while the extension slash surface still renders the human `output` string.
+// `error` is normalized without an "Error:" prefix so callers get a clean
+// message; `output` keeps the prefixed human form for display.
+function domainError(message) {
+  const normalized = String(message || "").replace(/^Error:\s*/, "");
+  return { ok: false, error: normalized, output: `Error: ${normalized}` };
+}
+
 export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
   const { cmd, args, isTop } = parseBacklogCommand(rawText);
   const resolveQueueForItemOps = () => resolveItemCommandContext({ cwd });
@@ -64,22 +73,31 @@ export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
   switch (cmd) {
     case "add": {
       const desc = args.join(" ").trim();
-      if (!desc) return "Error: Description required. Usage: /backlog add <description>";
+      if (!desc) return domainError("Description required. Usage: /backlog add <description>");
       const queueContext = resolveQueueForItemOps();
-      if (queueContext.error) return queueContext.error;
+      if (queueContext.error) return domainError(queueContext.error);
       const { id, position } = addItem(desc, isTop, queueContext.queueId);
-      return `Added: '${desc}' [id: ${id}, position: ${position}]`;
+      return {
+        output: `Added: '${desc}' [id: ${id}, position: ${position}]`,
+        item: { id, position, description: desc },
+      };
     }
     case "list": {
       const queueContext = resolveQueueForList();
-      if (queueContext.error) return queueContext.error;
-      return formatItems(listPendingItems(queueContext.queueId), queueContext.queueId);
+      if (queueContext.error) return domainError(queueContext.error);
+      const items = listPendingItems(queueContext.queueId);
+      return {
+        output: formatItems(items, queueContext.queueId),
+        queueId: queueContext.queueId,
+        items,
+      };
     }
     case "done": {
       const queueContext = resolveQueueForItemOps();
-      if (queueContext.error) return queueContext.error;
+      if (queueContext.error) return domainError(queueContext.error);
       const item = markDone(args[0], queueContext.queueId);
-      return item ? `Marked '${item.description}' as done` : `Error: Item '${args[0]}' not found`;
+      if (!item) return domainError(`Item '${args[0]}' not found`);
+      return { output: `Marked '${item.description}' as done`, item };
     }
     case "remove": {
       const queueContext = resolveQueueForItemOps();
@@ -89,11 +107,12 @@ export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
     }
     case "edit": {
       const queueContext = resolveQueueForItemOps();
-      if (queueContext.error) return queueContext.error;
+      if (queueContext.error) return domainError(queueContext.error);
       const [ref, ...rest] = args;
       const desc = rest.join(" ").trim();
       const item = editItem(ref, desc, queueContext.queueId);
-      return item ? `Updated '${item.description}'` : `Error: Item '${ref}' not found or empty description`;
+      if (!item) return domainError(`Item '${ref}' not found or empty description`);
+      return { output: `Updated '${item.description}'`, item };
     }
     case "move": {
       if (!args[0] || !args[1]) return "Error: Usage: /backlog move <id-or-position> <position|top|bottom>";
