@@ -11,7 +11,7 @@ const commandDefinitions = [
     name: "add",
     scope: "slash",
     description: "Add a backlog item.",
-    usage: "/backlog add <description>",
+    usage: "/backlog add [--top] <description>",
   },
   {
     name: "list",
