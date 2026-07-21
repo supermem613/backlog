@@ -72,6 +72,35 @@ function hasBacklogDatabase(dirPath) {
   return existsSync(join(dirPath, "backlog.db"));
 }
 
+function validateAddArgs(args) {
+  const invalid = args.find((arg) => arg.startsWith("-") && arg !== "--top");
+  if (!invalid) return null;
+
+  const addCommand = getCliCommandDefinition("add");
+  if (!addCommand?.usage) {
+    return {
+      ok: false,
+      command: "add",
+      schemaVersion: SCHEMA_VERSION,
+      data: {
+        error: "Missing canonical add usage definition",
+      },
+      timingMs: 0,
+    };
+  }
+
+  return {
+    ok: false,
+    command: "add",
+    schemaVersion: SCHEMA_VERSION,
+    data: {
+      error: `Unsupported add flag: ${invalid}`,
+      help: `Usage: ${addCommand.usage}`,
+    },
+    timingMs: 0,
+  };
+}
+
 function resolveDatabaseDir(explicitCwd, explicitDbDir = null) {
   if (explicitDbDir) return explicitDbDir;
   const candidates = [];
@@ -112,7 +141,13 @@ export async function runCli(argv = process.argv.slice(2)) {
       return handleBacklogCommand;
     };
 
-    if (parsed.help && commandName !== "help") {
+    const addValidationFailure = commandName === "add" ? validateAddArgs(parsed.args) : null;
+    if (addValidationFailure) {
+      envelope.ok = false;
+      envelope.data = addValidationFailure.data;
+      envelope.command = addValidationFailure.command;
+      envelope.schemaVersion = addValidationFailure.schemaVersion;
+    } else if (parsed.help && commandName !== "help") {
       const commandHelp = formatCliCommandHelp(commandName);
       envelope.data = { help: commandHelp, command: getCliCommandDefinition(commandName) };
     } else if (commandName === "help") {

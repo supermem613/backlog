@@ -14,9 +14,13 @@ import { runCli } from "../cli.mjs";
 
 const tempDir = mkdtempSync(join(tmpdir(), "cli-parity-"));
 const initDir = mkdtempSync(join(tmpdir(), "cli-init-"));
+const topInitDir = mkdtempSync(join(tmpdir(), "cli-top-init-"));
+const topSandboxDir = mkdtempSync(join(tmpdir(), "cli-top-sandbox-"));
 process.on("exit", () => {
   try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
   try { rmSync(initDir, { recursive: true, force: true }); } catch {}
+  try { rmSync(topInitDir, { recursive: true, force: true }); } catch {}
+  try { rmSync(topSandboxDir, { recursive: true, force: true }); } catch {}
 });
 
 const queue = createQueue({ id: "queue-cli-parity", name: "CLI Parity Queue" });
@@ -211,6 +215,52 @@ if (statusResult.error) {
   }
   assertEqual(cliListEnvelope?.data?.queueId, "cli-init-queue", "list envelope should expose the resolved queue id");
   assertEqual(cliListEnvelope?.data?.items?.[0]?.description, "editable cli item", "list envelope should expose pending items as objects");
+
+  const unsupportedAddFlagsResult = spawnSync(process.execPath, [cliPath, "add", "unsupported add flag item", "--unsupported-flag", "--cwd", initDir, "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(unsupportedAddFlagsResult.status, 1, `unsupported add flags should exit non-zero expected 1 got ${unsupportedAddFlagsResult.status}`);
+  let unsupportedAddFlagsEnvelope;
+  try {
+    unsupportedAddFlagsEnvelope = JSON.parse(unsupportedAddFlagsResult.stdout);
+  } catch (error) {
+    assert(false, `unsupported add flags stdout should be parseable JSON: ${error.message}`);
+  }
+  assertEqual(unsupportedAddFlagsEnvelope?.ok, false, `unsupported add flags should report ok=false expected false got ${unsupportedAddFlagsEnvelope?.ok}`);
+  const usageText = unsupportedAddFlagsEnvelope?.data?.help || unsupportedAddFlagsEnvelope?.data?.usage || unsupportedAddFlagsEnvelope?.data?.message;
+  assertEqual(usageText, "Usage: backlog add [--top] <description>", "unsupported add flags usage guidance should advertise the supported --top form");
+  const topQueueInitResult = spawnSync(process.execPath, [cliPath, "init", "top-cli-queue", "Top CLI Queue", "--cwd", topInitDir, "--db-dir", topSandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(topQueueInitResult.status, 0, "isolated top add coverage should init queue exit 0");
+  const topAddResult = spawnSync(process.execPath, [cliPath, "add", "--top", "top cli item", "--cwd", topInitDir, "--db-dir", topSandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(topAddResult.status, 0, `top add should exit 0 expected 0 got ${topAddResult.status}`);
+  let topAddEnvelope;
+  try {
+    topAddEnvelope = JSON.parse(topAddResult.stdout);
+  } catch (error) {
+    assert(false, `top add stdout should be parseable JSON: ${error.message}`);
+  }
+  assertEqual(topAddEnvelope?.ok, true, `top add should report ok=true expected true got ${topAddEnvelope?.ok}`);
+  assertEqual(topAddEnvelope?.data?.item?.description, "top cli item", "top add envelope should expose the created item");
+  const unsupportedAddListResult = spawnSync(process.execPath, [cliPath, "list", "--cwd", initDir, "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(unsupportedAddListResult.status, 0, "unsupported add flags should keep list command exit 0");
+  let unsupportedAddListEnvelope;
+  try {
+    unsupportedAddListEnvelope = JSON.parse(unsupportedAddListResult.stdout);
+  } catch (error) {
+    assert(false, `unsupported add flags list stdout should be parseable JSON: ${error.message}`);
+  }
+  const pendingQueueLength = unsupportedAddListEnvelope?.data?.items?.length ?? 0;
+  assertEqual(pendingQueueLength, 1, `pending queue expected 1 got ${pendingQueueLength}`);
 
   const queuesResult = spawnSync(process.execPath, [cliPath, "queues", "--db-dir", sandboxDir], {
     cwd: process.cwd(),

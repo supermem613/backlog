@@ -107,6 +107,8 @@ Items can be referenced by short ID (e.g. `t1a2b3`) or by position number (e.g. 
 Use `/backlog list` to see the current workspace queue, or `/backlog list <queue-id>` to inspect a specific queue from `/backlog queue list`. The first listed item is the next pending item.
 Use `/backlog move <item> <position|top|bottom>` to reorder a queue.
 
+Unsupported `backlog add` CLI flags are rejected with usage guidance before any item is stored, so the queue stays unchanged.
+
 The current workspace queue is the workspace-resolved queue for the command's `cwd`. Backlog is passive: it stores queue items and does not track live sessions or push work into Copilot.
 
 `/backlog status` is read-only. It reports the selected `queueId`, queue bindings, item counts, match type (`exact`, `worktree-origin`, `ancestor`, or `default`), and any ambiguous candidates. Use it to confirm what workspace-resolved queue Copilot CLI will operate on before adding, draining, or starting work.
