@@ -1,6 +1,6 @@
 // Slash command parser and dispatcher.
 
-import { createQueue, getQueue, listQueues, updateQueue } from "./db.mjs";
+import { createQueue, getQueue, listQueues, listQueueSummaries, updateQueue } from "./db.mjs";
 import {
   addItem,
   markDone,
@@ -8,6 +8,8 @@ import {
   editItem,
   moveItem,
   listPendingItems,
+  listQueueItemCounts,
+  listQueueItems,
   getPendingCount,
   clearQueueItems,
 } from "./items.mjs";
@@ -49,6 +51,43 @@ function queueIdFromScope(scope) {
 function formatItems(rows, queueId) {
   if (rows.length === 0) return `Queue '${queueId}' is empty`;
   return [`Queue '${queueId}' pending items:`, ...rows.map((item) => `#${item.position} [${item.id}] ${item.description}`)].join("\n");
+}
+
+function summarizeQueues(queues) {
+  const countsByQueue = new Map();
+  const queueId = queues.length === 1 ? queues[0].id : null;
+  for (const row of listQueueItemCounts(queueId)) {
+    const itemCounts = countsByQueue.get(row.queue_id) || {};
+    itemCounts[row.status] = row.count;
+    countsByQueue.set(row.queue_id, itemCounts);
+  }
+  return queues.map((queue) => {
+    const itemCounts = countsByQueue.get(queue.id) || {};
+    return {
+      ...queue,
+      itemCount: Object.values(itemCounts).reduce((total, count) => total + count, 0),
+      itemCounts,
+    };
+  });
+}
+
+function formatQueues(queues) {
+  if (queues.length === 0) return "No queues";
+  return queues.map((queue) => {
+    const counts = Object.entries(queue.itemCounts)
+      .map(([status, count]) => `${status}: ${count}`)
+      .join(", ");
+    const suffix = counts ? ` (${counts})` : " (empty)";
+    return `  ${queue.id} - ${queue.name}${queue.description ? ` - ${queue.description}` : ""}${suffix}`;
+  }).join("\n");
+}
+
+function formatQueueDetails(queue, items) {
+  if (items.length === 0) return `Queue '${queue.id}' is empty`;
+  return [
+    `Queue '${queue.name}' [id: ${queue.id}] items:`,
+    ...items.map((item) => `#${item.position} [${item.status}] [${item.id}] ${item.description}`),
+  ].join("\n");
 }
 
 // Item commands return structured envelopes so the CLI can expose machine data
@@ -165,9 +204,21 @@ export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
     case "queue": {
       const sub = (args[0] || "list").toLowerCase();
       if (sub === "list") {
-        const queues = listQueues();
-        if (queues.length === 0) return "No queues";
-        return queues.map((queue) => `  ${queue.id} - ${queue.name}${queue.description ? ` - ${queue.description}` : ""}`).join("\n");
+        if (args[1]) {
+          const queue = getQueue(args[1]);
+          if (!queue) return domainError(`Queue '${args[1]}' not found`);
+          const items = listQueueItems(queue.id);
+          return {
+            output: formatQueueDetails(queue, items),
+            queue: summarizeQueues([queue])[0],
+            items,
+          };
+        }
+        const queues = listQueueSummaries();
+        return {
+          output: formatQueues(queues),
+          queues,
+        };
       }
       if (sub === "add" || sub === "create") {
         const queueId = args[1];
@@ -192,7 +243,17 @@ export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
         if (!queue) return `Error: Queue '${queueId}' not found`;
         return `Renamed queue '${queue.name}' [id: ${queue.id}]`;
       }
-      return "Error: Usage: /backlog queue list|add|create|edit|rename";
+      if (args.length <= 2 && (!args[1] || args[1].toLowerCase() === "list")) {
+        const queue = getQueue(args[0]);
+        if (!queue) return domainError(`Queue '${args[0]}' not found`);
+        const items = listQueueItems(queue.id);
+        return {
+          output: formatQueueDetails(queue, items),
+          queue: summarizeQueues([queue])[0],
+          items,
+        };
+      }
+      return domainError("Usage: /backlog queue [list [queue-id]|<queue-id> [list]|add|create|edit|rename]");
     }
     case "show": {
       if (!sidecarState.role) tryStartSidecar();
