@@ -122,13 +122,20 @@ Run `/backlog init` or `backlog init` from a repo directory to create or reuse a
 The package also installs a `backlog` CLI that mirrors the slash command surface for automation and local tests:
 
 ```
+backlog
+backlog commands
+backlog queues
+backlog queue <queue-id>
+backlog queue <queue-id> list
 backlog status
 backlog init
 backlog add "write the next test" --cwd C:\path\to\repo
 backlog schema
 ```
 
-Use `--cwd <path>` to resolve the queue for a workspace directory. Use `--db-dir <path>` in tests or automation when you need an isolated backlog database. Every CLI command writes a stable JSON envelope with `ok`, `command`, `schemaVersion`, `data`, and `timingMs`.
+`backlog` and `backlog commands` return the CLI command catalog as structured entries with CLI usage. `backlog queues` returns every queue with total and per-status item counts. `backlog queue <queue-id>` returns the queue plus all of its items, including status, priority, timestamps, POR context, and active lease details when present. The equivalent `backlog queue list <queue-id>` and `backlog queue <queue-id> list` forms are also accepted. Use `backlog queue list <queue-id>` when a queue id matches a mutation verb such as `add` or `rename`.
+
+Use `--cwd <path>` to resolve the queue for a workspace directory. Named queue reads do not require a workspace binding. Use `--db-dir <path>` in tests or automation when you need an isolated backlog database. Every CLI command writes a stable JSON envelope with `ok`, `command`, `schemaVersion`, `data`, and `timingMs`.
 
 ### Agent-callable tools
 
