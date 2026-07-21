@@ -8,6 +8,7 @@ import {
   SCHEMA_VERSION,
   createSchemaEnvelope,
   formatCommandHelp,
+  getCommandDefinition,
   getSlashCommandNames,
 } from "./command-registry.mjs";
 
@@ -72,13 +73,29 @@ function hasBacklogDatabase(dirPath) {
 function validateAddArgs(args) {
   const invalid = args.find((arg) => arg.startsWith("-") && arg !== "--top");
   if (!invalid) return null;
+
+  const addCommand = getCommandDefinition("add");
+  if (!addCommand?.usage) {
+    return {
+      ok: false,
+      command: "add",
+      schemaVersion: SCHEMA_VERSION,
+      data: {
+        error: "Missing canonical add usage definition",
+      },
+      timingMs: 0,
+    };
+  }
+
+  const usage = addCommand.usage.replace(/^\/backlog /, "backlog ");
+
   return {
     ok: false,
     command: "add",
     schemaVersion: SCHEMA_VERSION,
     data: {
       error: `Unsupported add flag: ${invalid}`,
-      help: "Usage: backlog add <description>",
+      help: `Usage: ${usage}`,
     },
     timingMs: 0,
   };
@@ -115,53 +132,46 @@ export async function runCli(argv = process.argv.slice(2)) {
   };
 
   try {
-    const databaseDir = resolveDatabaseDir(parsed.cwd, parsed.dbDir);
-    initBacklog(databaseDir);
-
-    const [{ handleBacklogCommand }] = await Promise.all([
-      import("./commands.mjs"),
-    ]);
-
-    if (parsed.help && commandName !== "help") {
-      const commandHelp = formatCommandHelp(commandName);
-      envelope.data = { help: commandHelp };
-    } else if (commandName === "help") {
-      const target = parsed.args[0] || null;
-      envelope.data = { help: formatCommandHelp(target) };
-    } else if (commandName === "schema") {
-      envelope.data = createSchemaEnvelope();
-    } else if (commandName === "doctor") {
-      const result = await handleBacklogCommand("doctor", { cwd: parsed.cwd || process.cwd() });
-      envelope.data = typeof result === "string" ? { output: result } : result;
-    } else if (getSlashCommandNames().includes(commandName)) {
-      if (commandName === "add") {
-        const addValidationFailure = validateAddArgs(parsed.args);
-        if (addValidationFailure) {
-          envelope.ok = false;
-          envelope.data = addValidationFailure.data;
-          envelope.command = addValidationFailure.command;
-          envelope.schemaVersion = addValidationFailure.schemaVersion;
-          envelope.timingMs = Date.now() - startTime;
-          if (!envelope.ok) {
-            process.exitCode = 1;
-          }
-          process.stdout.write(`${JSON.stringify(envelope)}\n`);
-          return envelope;
-        }
-      }
-      const rawText = [commandName, ...parsed.args].join(" ").trim();
-      const result = await handleBacklogCommand(rawText, { cwd: parsed.cwd || process.cwd() });
-      if (result && typeof result === "object" && result.ok === false) {
-        envelope.ok = false;
-        delete result.ok;
-      }
-      envelope.data = typeof result === "string" ? { output: result } : result;
-    } else {
+    const addValidationFailure = commandName === "add" ? validateAddArgs(parsed.args) : null;
+    if (addValidationFailure) {
       envelope.ok = false;
-      envelope.data = {
-        error: `Unknown command: ${commandName}`,
-        knownCommands: getSlashCommandNames(),
-      };
+      envelope.data = addValidationFailure.data;
+      envelope.command = addValidationFailure.command;
+      envelope.schemaVersion = addValidationFailure.schemaVersion;
+    } else {
+      const databaseDir = resolveDatabaseDir(parsed.cwd, parsed.dbDir);
+      initBacklog(databaseDir);
+
+      const [{ handleBacklogCommand }] = await Promise.all([
+        import("./commands.mjs"),
+      ]);
+
+      if (parsed.help && commandName !== "help") {
+        const commandHelp = formatCommandHelp(commandName);
+        envelope.data = { help: commandHelp };
+      } else if (commandName === "help") {
+        const target = parsed.args[0] || null;
+        envelope.data = { help: formatCommandHelp(target) };
+      } else if (commandName === "schema") {
+        envelope.data = createSchemaEnvelope();
+      } else if (commandName === "doctor") {
+        const result = await handleBacklogCommand("doctor", { cwd: parsed.cwd || process.cwd() });
+        envelope.data = typeof result === "string" ? { output: result } : result;
+      } else if (getSlashCommandNames().includes(commandName)) {
+        const rawText = [commandName, ...parsed.args].join(" ").trim();
+        const result = await handleBacklogCommand(rawText, { cwd: parsed.cwd || process.cwd() });
+        if (result && typeof result === "object" && result.ok === false) {
+          envelope.ok = false;
+          delete result.ok;
+        }
+        envelope.data = typeof result === "string" ? { output: result } : result;
+      } else {
+        envelope.ok = false;
+        envelope.data = {
+          error: `Unknown command: ${commandName}`,
+          knownCommands: getSlashCommandNames(),
+        };
+      }
     }
   } catch (error) {
     envelope.ok = false;
