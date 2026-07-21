@@ -69,6 +69,21 @@ function hasBacklogDatabase(dirPath) {
   return existsSync(join(dirPath, "backlog.db"));
 }
 
+function validateAddArgs(args) {
+  const invalid = args.find((arg) => arg.startsWith("-") && arg !== "--top");
+  if (!invalid) return null;
+  return {
+    ok: false,
+    command: "add",
+    schemaVersion: SCHEMA_VERSION,
+    data: {
+      error: `Unsupported add flag: ${invalid}`,
+      help: "Usage: backlog add <description>",
+    },
+    timingMs: 0,
+  };
+}
+
 function resolveDatabaseDir(explicitCwd, explicitDbDir = null) {
   if (explicitDbDir) return explicitDbDir;
   const candidates = [];
@@ -119,6 +134,21 @@ export async function runCli(argv = process.argv.slice(2)) {
       const result = await handleBacklogCommand("doctor", { cwd: parsed.cwd || process.cwd() });
       envelope.data = typeof result === "string" ? { output: result } : result;
     } else if (getSlashCommandNames().includes(commandName)) {
+      if (commandName === "add") {
+        const addValidationFailure = validateAddArgs(parsed.args);
+        if (addValidationFailure) {
+          envelope.ok = false;
+          envelope.data = addValidationFailure.data;
+          envelope.command = addValidationFailure.command;
+          envelope.schemaVersion = addValidationFailure.schemaVersion;
+          envelope.timingMs = Date.now() - startTime;
+          if (!envelope.ok) {
+            process.exitCode = 1;
+          }
+          process.stdout.write(`${JSON.stringify(envelope)}\n`);
+          return envelope;
+        }
+      }
       const rawText = [commandName, ...parsed.args].join(" ").trim();
       const result = await handleBacklogCommand(rawText, { cwd: parsed.cwd || process.cwd() });
       if (result && typeof result === "object" && result.ok === false) {

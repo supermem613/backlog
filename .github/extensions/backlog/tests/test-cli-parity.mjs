@@ -152,6 +152,34 @@ if (statusResult.error) {
   assertEqual(cliListEnvelope?.data?.queueId, "cli-init-queue", "list envelope should expose the resolved queue id");
   assertEqual(cliListEnvelope?.data?.items?.[0]?.description, "editable cli item", "list envelope should expose pending items as objects");
 
+  const unsupportedAddFlagsResult = spawnSync(process.execPath, [cliPath, "add", "unsupported add flag item", "--unsupported-flag", "--cwd", initDir, "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(unsupportedAddFlagsResult.status, 1, `unsupported add flags should exit non-zero expected 1 got ${unsupportedAddFlagsResult.status}`);
+  let unsupportedAddFlagsEnvelope;
+  try {
+    unsupportedAddFlagsEnvelope = JSON.parse(unsupportedAddFlagsResult.stdout);
+  } catch (error) {
+    assert(false, `unsupported add flags stdout should be parseable JSON: ${error.message}`);
+  }
+  assertEqual(unsupportedAddFlagsEnvelope?.ok, false, `unsupported add flags should report ok=false expected false got ${unsupportedAddFlagsEnvelope?.ok}`);
+  const usageText = unsupportedAddFlagsEnvelope?.data?.help || unsupportedAddFlagsEnvelope?.data?.usage || unsupportedAddFlagsEnvelope?.data?.message;
+  assert(typeof usageText === "string" && /Usage: backlog add <description>/.test(usageText), "usage guidance undefined");
+  const unsupportedAddListResult = spawnSync(process.execPath, [cliPath, "list", "--cwd", initDir, "--db-dir", sandboxDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assertEqual(unsupportedAddListResult.status, 0, "unsupported add flags should keep list command exit 0");
+  let unsupportedAddListEnvelope;
+  try {
+    unsupportedAddListEnvelope = JSON.parse(unsupportedAddListResult.stdout);
+  } catch (error) {
+    assert(false, `unsupported add flags list stdout should be parseable JSON: ${error.message}`);
+  }
+  const pendingQueueLength = unsupportedAddListEnvelope?.data?.items?.length ?? 0;
+  assertEqual(pendingQueueLength, 1, `pending queue expected 1 got ${pendingQueueLength}`);
+
   const cliEditResult = spawnSync(process.execPath, [cliPath, "edit", editableId || "missing", "edited cli item", "--cwd", initDir, "--db-dir", sandboxDir], {
     cwd: process.cwd(),
     encoding: "utf8",
