@@ -7,7 +7,10 @@ import { initBacklog } from "./db.mjs";
 import {
   SCHEMA_VERSION,
   createSchemaEnvelope,
-  formatCommandHelp,
+  formatCliCommandHelp,
+  getCliCommandDefinitions,
+  getCliCommandNames,
+  getCliCommandDefinition,
   getSlashCommandNames,
 } from "./command-registry.mjs";
 
@@ -100,27 +103,44 @@ export async function runCli(argv = process.argv.slice(2)) {
   };
 
   try {
-    const databaseDir = resolveDatabaseDir(parsed.cwd, parsed.dbDir);
-    initBacklog(databaseDir);
-
-    const [{ handleBacklogCommand }] = await Promise.all([
-      import("./commands.mjs"),
-    ]);
+    let handleBacklogCommand = null;
+    const loadCommandHandler = async () => {
+      if (handleBacklogCommand) return handleBacklogCommand;
+      const databaseDir = resolveDatabaseDir(parsed.cwd, parsed.dbDir);
+      initBacklog(databaseDir);
+      ({ handleBacklogCommand } = await import("./commands.mjs"));
+      return handleBacklogCommand;
+    };
 
     if (parsed.help && commandName !== "help") {
-      const commandHelp = formatCommandHelp(commandName);
-      envelope.data = { help: commandHelp };
+      const commandHelp = formatCliCommandHelp(commandName);
+      envelope.data = { help: commandHelp, command: getCliCommandDefinition(commandName) };
     } else if (commandName === "help") {
       const target = parsed.args[0] || null;
-      envelope.data = { help: formatCommandHelp(target) };
+      envelope.data = target
+        ? { help: formatCliCommandHelp(target), command: getCliCommandDefinition(target) }
+        : {
+          help: formatCliCommandHelp(),
+          commands: getCliCommandDefinitions(),
+        };
     } else if (commandName === "schema") {
       envelope.data = createSchemaEnvelope();
+    } else if (commandName === "commands") {
+      envelope.data = {
+        commands: getCliCommandDefinitions(),
+      };
+    } else if (commandName === "queues") {
+      const commandHandler = await loadCommandHandler();
+      const result = await commandHandler("queue list", { cwd: parsed.cwd || process.cwd() });
+      envelope.data = typeof result === "string" ? { output: result } : result;
     } else if (commandName === "doctor") {
-      const result = await handleBacklogCommand("doctor", { cwd: parsed.cwd || process.cwd() });
+      const commandHandler = await loadCommandHandler();
+      const result = await commandHandler("doctor", { cwd: parsed.cwd || process.cwd() });
       envelope.data = typeof result === "string" ? { output: result } : result;
     } else if (getSlashCommandNames().includes(commandName)) {
       const rawText = [commandName, ...parsed.args].join(" ").trim();
-      const result = await handleBacklogCommand(rawText, { cwd: parsed.cwd || process.cwd() });
+      const commandHandler = await loadCommandHandler();
+      const result = await commandHandler(rawText, { cwd: parsed.cwd || process.cwd() });
       if (result && typeof result === "object" && result.ok === false) {
         envelope.ok = false;
         delete result.ok;
@@ -130,7 +150,7 @@ export async function runCli(argv = process.argv.slice(2)) {
       envelope.ok = false;
       envelope.data = {
         error: `Unknown command: ${commandName}`,
-        knownCommands: getSlashCommandNames(),
+        knownCommands: [...getSlashCommandNames(), ...getCliCommandNames()],
       };
     }
   } catch (error) {

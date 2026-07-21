@@ -89,6 +89,94 @@ export function listPendingItems(queueId) {
   ).all(queue, "pending");
 }
 
+export function listQueueItemCounts(queueId = null) {
+  const queue = queueId ? String(queueId).trim() : null;
+  const statement = queue ? db.prepare(`
+    SELECT queue_id, COALESCE(status, 'unknown') AS status, COUNT(*) AS count
+    FROM items
+    WHERE queue_id = ?
+    GROUP BY queue_id, COALESCE(status, 'unknown')
+    ORDER BY queue_id, COALESCE(status, 'unknown')
+  `) : db.prepare(`
+    SELECT queue_id, COALESCE(status, 'unknown') AS status, COUNT(*) AS count
+    FROM items
+    WHERE queue_id IS NOT NULL
+    GROUP BY queue_id, COALESCE(status, 'unknown')
+    ORDER BY queue_id, COALESCE(status, 'unknown')
+  `);
+  return queue ? statement.all(queue) : statement.all();
+}
+
+export function listQueueItems(queueId) {
+  const queue = String(queueId || "").trim();
+  if (!queue || !getQueue(queue)) throw new Error(`Queue '${queue}' not found`);
+  return db.prepare(`
+    SELECT
+      i.id,
+      i.description,
+      i.position,
+      i.priority,
+      i.queue_id,
+      COALESCE(i.status, 'unknown') AS status,
+      i.created_at,
+      i.updated_at,
+      p.por_id,
+      p.kind AS por_kind,
+      p.meta_json AS por_meta_json,
+      l.lease_id,
+      l.owner_session,
+      l.repo_root,
+      l.worktree_path,
+      l.heartbeat_at,
+      l.expires_at,
+      l.status AS lease_status,
+      l.needs_recovery
+    FROM items i
+    LEFT JOIN item_pors p ON p.item_id = i.id
+    LEFT JOIN item_leases l ON l.item_id = i.id
+    WHERE i.queue_id = ?
+    ORDER BY
+      CASE WHEN i.status = 'pending' THEN 0 ELSE 1 END,
+      i.status,
+      i.position,
+      i.created_at,
+      i.id
+  `).all(queue).map((row) => {
+    const {
+      por_id,
+      por_kind,
+      por_meta_json,
+      lease_id,
+      owner_session,
+      repo_root,
+      worktree_path,
+      heartbeat_at,
+      expires_at,
+      lease_status,
+      needs_recovery,
+      ...item
+    } = row;
+    return {
+      ...item,
+      por: por_id ? {
+        id: por_id,
+        kind: por_kind,
+        metadata: por_meta_json ? JSON.parse(por_meta_json) : {},
+      } : null,
+      lease: lease_id ? {
+        id: lease_id,
+        owner_session,
+        repo_root,
+        worktree_path,
+        heartbeat_at,
+        expires_at,
+        status: lease_status,
+        needs_recovery: !!needs_recovery,
+      } : null,
+    };
+  });
+}
+
 export function addItem(description, isTop = false, queueId) {
   const queue = normalizeQueueId(queueId);
   const out = tx(() => {
