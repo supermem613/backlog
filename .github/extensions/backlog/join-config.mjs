@@ -15,7 +15,7 @@ const ELEVATING_HANDLER_KEYS = [
 ];
 
 function getInvocationCwd(args, invocation) {
-  return args?.cwd || invocation?.cwd || invocation?.context?.cwd || null;
+  return args?.cwd || invocation?.cwd || invocation?.context?.cwd || process.cwd();
 }
 
 export function describeJoinPrivilege(config) {
@@ -64,7 +64,7 @@ export function createBacklogJoinConfig({
         handler: async (context) => {
           const sid = getActiveSessionId() || "default";
           const rawText = context.args || "list";
-          const result = await handleBacklogCommand(rawText, { cwd: context.cwd || context.options?.cwd });
+          const result = await handleBacklogCommand(rawText, { cwd: context.cwd || context.options?.cwd || process.cwd() });
           const message = typeof result === "string" || result == null
             ? result
             : (result.output ?? result.message ?? result);
