@@ -48,7 +48,11 @@ export function getNextPosition(queueId) {
 
 export function resolveItemRef(ref, queueId) {
   const queue = normalizeQueueId(queueId);
-  if (/^\d+$/.test(String(ref || ""))) {
+  // A nullish or blank ref must resolve to "no such item" rather than reaching
+  // the driver, which rejects a non-bindable parameter with a raw TypeError.
+  // Callers treat a throw as an execution failure and lose the real cause.
+  if (ref === undefined || ref === null || String(ref).trim() === "") return undefined;
+  if (/^\d+$/.test(String(ref))) {
     const pos = parseInt(ref, 10);
     return db.prepare(
       "SELECT * FROM items WHERE queue_id = ? AND status = ? AND position = ?"
@@ -56,7 +60,7 @@ export function resolveItemRef(ref, queueId) {
   }
   return db.prepare(
     "SELECT * FROM items WHERE id = ? AND queue_id = ?"
-  ).get(ref, queue);
+  ).get(String(ref), queue);
 }
 
 export function reorderPositions(queueId) {

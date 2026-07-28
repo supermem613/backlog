@@ -150,14 +150,14 @@ const toolDefinitions = [
   },
   {
     name: "backlog_done",
-    description: "Mark a backlog item as done by ID or position number.",
+    description: "Mark a backlog item as done by item ID or position number. Pass the item in `ref`; `id` is accepted as an alias.",
     parameters: {
       type: "object",
       properties: {
         ref: { type: "string", description: "Item ID or position number" },
+        id: { type: "string", description: "Alias for ref. Item ID or position number" },
         cwd: { type: "string", description: "Workspace directory to inspect" },
       },
-      required: ["ref"],
     },
   },
   {

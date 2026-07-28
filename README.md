@@ -146,10 +146,10 @@ Use `--cwd <path>` to resolve the queue for a workspace directory. Named queue r
 The agent automatically gets these passive tools:
 
 - `backlog_list` — list all pending items.
-- `backlog_done` — mark an item complete by id or position.
+- `backlog_done` — mark an item complete by item id or position. Pass it as `ref`; `id` is accepted as an alias for the same value.
 - `backlog_status` — inspect which queue is bound to the current workspace.
 
-Tools accept `cwd` when the agent needs to inspect or operate on a specific workspace. If no `cwd` is available, or if no queue binding resolves for that workspace, item operations fail closed instead of silently using a fallback queue. Add, edit, remove, move, and next-work selection stay explicit user actions through `/backlog ...` or `backlog ...`, not automatic agent-callable tools.
+Tools accept `cwd` when the agent needs to inspect or operate on a specific workspace. If no `cwd` is available, or if no queue binding resolves for that workspace, item operations fail closed instead of silently using a fallback queue. `backlog_done` validates its item reference in the handler and returns a message naming the cause, so a missing argument, a conflicting `ref`/`id` pair, and an unknown item stay distinguishable from one another. Add, edit, remove, move, and next-work selection stay explicit user actions through `/backlog ...` or `backlog ...`, not automatic agent-callable tools.
 
 ### Permission prompts
 
