@@ -12,12 +12,14 @@ const commandDefinitions = [
     scope: "slash",
     description: "Add a backlog item.",
     usage: "/backlog add [--top] <description>",
+    allowedFlags: ["--top"],
   },
   {
     name: "list",
     scope: "slash",
-    description: "List pending items in the resolved or named queue.",
-    usage: "/backlog list [queue-id]",
+    description: "List items in the resolved or named queue; default is pending-only, and unrecognized flags are rejected.",
+    usage: "/backlog list [queue-id] [--status <value>]",
+    allowedFlags: ["--status"],
   },
   {
     name: "move",

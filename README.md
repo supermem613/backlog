@@ -81,7 +81,7 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 ```
 /backlog add <description>          # append a new item
 /backlog add --top <description>    # add as position 1
-/backlog list [queue-id]            # show pending items in the resolved or named queue
+/backlog list [queue-id] [--status <value>] # show items in the resolved or named queue (default pending-only)
 /backlog move <id-or-position> <position|top|bottom> # reorder an item
 /backlog done <id-or-position>      # mark complete
 /backlog remove <id-or-position>    # delete without completing
@@ -105,6 +105,7 @@ Enable `backlog` under **User**. Then run `/backlog list` to confirm.
 
 Items can be referenced by short ID (e.g. `t1a2b3`) or by position number (e.g. `2`).
 Use `/backlog list` to see the current workspace queue, or `/backlog list <queue-id>` to inspect a specific queue from `/backlog queue list`. The first listed item is the next pending item.
+Add `--status <value>` to inspect a different status; omitting it keeps the default pending-only view. Use `--status done` for done items. Unknown status values and `--status` without a value are rejected loudly instead of returning an empty list.
 Use `/backlog move <item> <position|top|bottom>` to reorder a queue.
 
 Unsupported `backlog add` CLI flags are rejected with usage guidance before any item is stored, so the queue stays unchanged.
@@ -129,11 +130,14 @@ backlog queue <queue-id>
 backlog queue <queue-id> list
 backlog status
 backlog init
+backlog list <queue-id> --status done
 backlog add "write the next test" --cwd C:\path\to\repo
 backlog schema
 ```
 
 `backlog` and `backlog commands` return the CLI command catalog as structured entries with CLI usage. `backlog queues` returns every queue with total and per-status item counts. `backlog queue <queue-id>` returns the queue plus all of its items, including status, priority, timestamps, POR context, and active lease details when present. The equivalent `backlog queue list <queue-id>` and `backlog queue <queue-id> list` forms are also accepted. Use `backlog queue list <queue-id>` when a queue id matches a mutation verb such as `add` or `rename`.
+
+Use `backlog list <queue-id> [--status <value>]` to inspect a specific status; omit `--status` to keep the default pending-only view. Every CLI command now rejects unrecognized dash-prefixed arguments with a non-zero exit, including `--status` without a value or unsupported status values.
 
 Use `--cwd <path>` to resolve the queue for a workspace directory. Named queue reads do not require a workspace binding. Use `--db-dir <path>` in tests or automation when you need an isolated backlog database. Every CLI command writes a stable JSON envelope with `ok`, `command`, `schemaVersion`, `data`, and `timingMs`.
 

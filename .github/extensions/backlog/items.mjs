@@ -82,11 +82,16 @@ export function getTopItem(queueId) {
   ).get(queue, "pending");
 }
 
-export function listPendingItems(queueId) {
+export function listItems(queueId, status = "pending") {
   const queue = normalizeQueueId(queueId);
+  const resolvedStatus = String(status || "pending").trim().toLowerCase() || "pending";
   return db.prepare(
     "SELECT id, description, position FROM items WHERE queue_id = ? AND status = ? ORDER BY position"
-  ).all(queue, "pending");
+  ).all(queue, resolvedStatus);
+}
+
+export function listPendingItems(queueId) {
+  return listItems(queueId, "pending");
 }
 
 export function listQueueItemCounts(queueId = null) {

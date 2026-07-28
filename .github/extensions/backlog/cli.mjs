@@ -72,18 +72,23 @@ function hasBacklogDatabase(dirPath) {
   return existsSync(join(dirPath, "backlog.db"));
 }
 
-function validateAddArgs(args) {
-  const invalid = args.find((arg) => arg.startsWith("-") && arg !== "--top");
+function validateCommandArgs(commandName, args) {
+  const commandDefinition = getCliCommandDefinition(commandName);
+  if (!commandDefinition) return null;
+
+  const allowedFlags = Array.isArray(commandDefinition.allowedFlags)
+    ? commandDefinition.allowedFlags
+    : [];
+  const invalid = args.find((arg) => arg.startsWith("-") && !allowedFlags.includes(arg));
   if (!invalid) return null;
 
-  const addCommand = getCliCommandDefinition("add");
-  if (!addCommand?.usage) {
+  if (!commandDefinition.usage) {
     return {
       ok: false,
-      command: "add",
+      command: commandName,
       schemaVersion: SCHEMA_VERSION,
       data: {
-        error: "Missing canonical add usage definition",
+        error: `Missing canonical ${commandName} usage definition`,
       },
       timingMs: 0,
     };
@@ -91,11 +96,11 @@ function validateAddArgs(args) {
 
   return {
     ok: false,
-    command: "add",
+    command: commandName,
     schemaVersion: SCHEMA_VERSION,
     data: {
-      error: `Unsupported add flag: ${invalid}`,
-      help: `Usage: ${addCommand.usage}`,
+      error: `Unsupported ${commandName} flag: ${invalid}`,
+      help: `Usage: ${commandDefinition.usage}`,
     },
     timingMs: 0,
   };
@@ -141,12 +146,12 @@ export async function runCli(argv = process.argv.slice(2)) {
       return handleBacklogCommand;
     };
 
-    const addValidationFailure = commandName === "add" ? validateAddArgs(parsed.args) : null;
-    if (addValidationFailure) {
+    const commandValidationFailure = validateCommandArgs(commandName, parsed.args);
+    if (commandValidationFailure) {
       envelope.ok = false;
-      envelope.data = addValidationFailure.data;
-      envelope.command = addValidationFailure.command;
-      envelope.schemaVersion = addValidationFailure.schemaVersion;
+      envelope.data = commandValidationFailure.data;
+      envelope.command = commandValidationFailure.command;
+      envelope.schemaVersion = commandValidationFailure.schemaVersion;
     } else if (parsed.help && commandName !== "help") {
       const commandHelp = formatCliCommandHelp(commandName);
       envelope.data = { help: commandHelp, command: getCliCommandDefinition(commandName) };
