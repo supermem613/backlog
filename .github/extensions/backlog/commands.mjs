@@ -7,7 +7,7 @@ import {
   removeItem,
   editItem,
   moveItem,
-  listPendingItems,
+  listItems,
   listQueueItemCounts,
   listQueueItems,
   getPendingCount,
@@ -32,12 +32,34 @@ import { exportBacklogBackup, restoreBacklogBackup } from "./backup.mjs";
 
 export function parseBacklogCommand(input) {
   const text = String(input || "").trim();
-  if (!text) return { cmd: "list", args: [], isTop: false };
+  if (!text) return { cmd: "list", args: [], isTop: false, status: "pending", statusError: null };
   const parts = text.split(/\s+/);
   const cmd = parts.shift().toLowerCase();
-  const isTop = parts.includes("--top");
-  const args = parts.filter((part) => part !== "--top");
-  return { cmd, args, isTop };
+  const args = [];
+  let isTop = false;
+  let status = "pending";
+  let statusError = null;
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (part === "--top") {
+      isTop = true;
+      continue;
+    }
+    if (part === "--status" && cmd === "list") {
+      const nextPart = parts[index + 1];
+      if (nextPart && !nextPart.startsWith("--")) {
+        status = nextPart.toLowerCase();
+        index += 1;
+        continue;
+      }
+      statusError = "Missing value for --status";
+      continue;
+    }
+    args.push(part);
+  }
+
+  return { cmd, args, isTop, status, statusError };
 }
 
 function queueIdFromScope(scope) {
@@ -48,9 +70,10 @@ function queueIdFromScope(scope) {
   return (leaf || "backlog").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "backlog";
 }
 
-function formatItems(rows, queueId) {
+function formatItems(rows, queueId, status = "pending") {
   if (rows.length === 0) return `Queue '${queueId}' is empty`;
-  return [`Queue '${queueId}' pending items:`, ...rows.map((item) => `#${item.position} [${item.id}] ${item.description}`)].join("\n");
+  const resolvedStatus = String(status || "pending").trim().toLowerCase() || "pending";
+  return [`Queue '${queueId}' ${resolvedStatus} items:`, ...rows.map((item) => `#${item.position} [${item.id}] ${item.description}`)].join("\n");
 }
 
 function summarizeQueues(queues) {
@@ -100,7 +123,7 @@ function domainError(message) {
 }
 
 export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
-  const { cmd, args, isTop } = parseBacklogCommand(rawText);
+  const { cmd, args, isTop, status, statusError } = parseBacklogCommand(rawText);
   const resolveQueueForItemOps = () => resolveItemCommandContext({ cwd });
   const resolveQueueForList = () => {
     const queueId = args[0]?.trim();
@@ -108,6 +131,9 @@ export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
     const queue = getQueue(queueId);
     return queue ? { queueId: queue.id } : { error: `Error: Queue '${queueId}' not found` };
   };
+  const normalizedStatus = String(status || "pending").trim().toLowerCase() || "pending";
+
+  if (cmd === "list" && statusError) return domainError(statusError);
 
   switch (cmd) {
     case "add": {
@@ -122,11 +148,14 @@ export async function handleBacklogCommand(rawText, { cwd = null } = {}) {
       };
     }
     case "list": {
+      if (normalizedStatus !== "pending" && normalizedStatus !== "done") {
+        return domainError(`Unsupported list status: ${status}`);
+      }
       const queueContext = resolveQueueForList();
       if (queueContext.error) return domainError(queueContext.error);
-      const items = listPendingItems(queueContext.queueId);
+      const items = listItems(queueContext.queueId, normalizedStatus);
       return {
-        output: formatItems(items, queueContext.queueId),
+        output: formatItems(items, queueContext.queueId, normalizedStatus),
         queueId: queueContext.queueId,
         items,
       };
